@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>FarmNow — Prototype</title>
+<title>FarmNow — Livraison Express Bruxelles</title>
 <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
@@ -19,14 +19,17 @@
     font-family: -apple-system, system-ui, sans-serif;
   }
   ::-webkit-scrollbar { display: none; }
+  @keyframes pulse-dot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.6;transform:scale(.85)} }
+  @keyframes slide-up { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
+  @keyframes countdown-tick { 0%{transform:scale(1)} 50%{transform:scale(1.06)} 100%{transform:scale(1)} }
 </style>
 <template id="__bundler_thumbnail">
   <svg viewBox="0 0 80 56" xmlns="http://www.w3.org/2000/svg">
-    <rect width="80" height="56" fill="#4a6741"/>
+    <rect width="80" height="56" fill="#3d5c35"/>
     <rect x="28" y="6" width="24" height="44" rx="4" fill="#f5f0e6"/>
     <rect x="32" y="14" width="16" height="8" rx="2" fill="#c8613a"/>
-    <rect x="32" y="26" width="16" height="3" rx="1" fill="#4a6741"/>
-    <rect x="32" y="32" width="12" height="3" rx="1" fill="#4a6741" opacity=".5"/>
+    <rect x="32" y="26" width="16" height="3" rx="1" fill="#3d5c35"/>
+    <rect x="32" y="32" width="12" height="3" rx="1" fill="#3d5c35" opacity=".5"/>
   </svg>
 </template>
 </head>
@@ -34,7 +37,7 @@
 <div id="root"></div>
 
 <script type="text/babel">
-const { useState, useEffect } = React;
+const { useState, useEffect, useCallback } = React;
 
 const T = {
   green:      '#3d5c35',
@@ -46,53 +49,131 @@ const T = {
   muted:      '#7a7a68',
   border:     'rgba(0,0,0,0.08)',
   tag:        '#eef2eb',
+  express:    '#e84c1e',
 };
 
+// ─── LIVRAISON EXPRESS LOGIC ───────────────────────────────────
+// Heure Brussels (Europe/Brussels = UTC+1 en hiver, UTC+2 en été)
+function getBrusselsHour() {
+  const now = new Date();
+  // Utilise l'heure locale du navigateur si c'est à Bruxelles,
+  // sinon on simule bien avec toLocaleString
+  const brusselStr = now.toLocaleString('fr-BE', { timeZone: 'Europe/Brussels', hour: '2-digit', minute: '2-digit', hour12: false });
+  const [h, m] = brusselStr.split(':').map(Number);
+  return { hour: h, minute: m };
+}
+
+function getDeliverySlots() {
+  const { hour, minute } = getBrusselsHour();
+  const nowMinutes = hour * 60 + minute;
+
+  // Définition des créneaux : [labelFR, startH, endH, cutoffH, cutoffM]
+  // cutoff = heure limite pour commander ce créneau
+  const ALL_SLOTS = [
+    { label: "Aujourd'hui  12h – 14h", day: 'today',     start: 12, end: 14, cutoffH: 10, cutoffM: 0  },
+    { label: "Aujourd'hui  17h – 19h", day: 'today',     start: 17, end: 19, cutoffH: 15, cutoffM: 0  },
+    { label: "Aujourd'hui  19h – 21h", day: 'today',     start: 19, end: 21, cutoffH: 17, cutoffM: 0  },
+    { label: "Demain  8h – 10h",       day: 'tomorrow',  start:  8, end: 10, cutoffH: 99, cutoffM: 0  },
+    { label: "Demain  12h – 14h",      day: 'tomorrow',  start: 12, end: 14, cutoffH: 99, cutoffM: 0  },
+    { label: "Demain  17h – 19h",      day: 'tomorrow',  start: 17, end: 19, cutoffH: 99, cutoffM: 0  },
+  ];
+
+  return ALL_SLOTS.map(s => {
+    let available = true;
+    let urgency = null; // 'soon', 'last', null
+
+    if (s.day === 'today') {
+      const cutoffMinutes = s.cutoffH * 60 + s.cutoffM;
+      const minutesLeft = cutoffMinutes - nowMinutes;
+      if (minutesLeft <= 0) {
+        available = false; // créneau passé
+      } else if (minutesLeft <= 60) {
+        urgency = 'last'; // moins d'1h pour commander
+      } else if (minutesLeft <= 120) {
+        urgency = 'soon'; // moins de 2h
+      }
+    }
+
+    return { ...s, available, urgency };
+  }).filter(s => s.available);
+}
+
+function getNextSlotCountdown() {
+  const { hour, minute } = getBrusselsHour();
+  const nowMinutes = hour * 60 + minute;
+  const slots = getDeliverySlots();
+  const todaySlots = slots.filter(s => s.day === 'today');
+  if (todaySlots.length === 0) return null;
+
+  const next = todaySlots[0];
+  const cutoffMinutes = next.cutoffH * 60 + next.cutoffM;
+  const diff = cutoffMinutes - nowMinutes;
+  if (diff <= 0) return null;
+
+  const h = Math.floor(diff / 60);
+  const m = diff % 60;
+  return { label: next.label, h, m, urgency: next.urgency };
+}
+
+function isExpressAvailableToday() {
+  const slots = getDeliverySlots();
+  return slots.some(s => s.day === 'today');
+}
+
 // ─── DATA ─────────────────────────────────────────────────────
+const COMMUNES_BXL = [
+  'Bruxelles-Ville', 'Ixelles', 'Etterbeek', 'Saint-Gilles',
+  'Forest', 'Uccle', 'Anderlecht', 'Molenbeek', 'Laeken',
+  'Schaerbeek', 'Jette', 'Koekelberg', 'Woluwe-Saint-Lambert',
+  'Woluwe-Saint-Pierre', 'Auderghem', 'Watermael-Boitsfort',
+  'Ganshoren', 'Berchem-Sainte-Agathe', 'Evere'
+];
+
 const FARMS = [
-  { id:1, name:'Ferme de la Vallée', location:'Wavre',             rating:4.9, distance:'32 km', img:'https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=160&h=160&fit=crop&crop=center' },
-  { id:2, name:'Les Champs d\'Or',   location:'Gembloux',          rating:4.7, distance:'45 km', img:'https://images.unsplash.com/photo-1464226184884-fa280b87c399?w=160&h=160&fit=crop&crop=center' },
-  { id:3, name:'La Ferme Verte',     location:'Waterloo',          rating:4.8, distance:'18 km', img:'https://images.unsplash.com/photo-1416879595882-3373a0480b5b?w=160&h=160&fit=crop&crop=center' },
-  { id:4, name:'Ferme du Soleil',    location:'Louvain-la-Neuve',  rating:4.6, distance:'26 km', img:'https://images.unsplash.com/photo-1523348837708-15d4a09cfac2?w=160&h=160&fit=crop&crop=center' },
+  { id:1, name:'Hoeve De Groene Veld', location:'Lot (Beersel)', rating:4.9, distance:'14 km', img:'https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=160&h=160&fit=crop&crop=center' },
+  { id:2, name:'Ferme du Moulin',      location:'Braine-l\'Alleud', rating:4.7, distance:'22 km', img:'https://images.unsplash.com/photo-1464226184884-fa280b87c399?w=160&h=160&fit=crop&crop=center' },
+  { id:3, name:'La Ferme de Linkebeek',location:'Linkebeek',       rating:4.8, distance:'11 km', img:'https://images.unsplash.com/photo-1416879595882-3373a0480b5b?w=160&h=160&fit=crop&crop=center' },
+  { id:4, name:'Hoeve Brabant Bio',    location:'Overijse',         rating:4.6, distance:'19 km', img:'https://images.unsplash.com/photo-1523348837708-15d4a09cfac2?w=160&h=160&fit=crop&crop=center' },
 ];
 
 const PRODUCTS = [
-  { id:1, name:'Tomates cerises bio', name_en:'Organic cherry tomatoes', farm:1, cat:'Légumes',        price:3.50,  unit:'500 g',  color:'#c8402a', desc:'Cultivées en plein air, sans pesticides. Récoltées chaque matin et livrées le jour même depuis Wavre.',        img:'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=400&h=400&fit=crop' },
-  { id:2, name:'Carottes nouvelles',  name_en:'Baby carrots',            farm:2, cat:'Légumes',        price:2.80,  unit:'1 kg',   color:'#d4621a', desc:'Carottes tendres et sucrées, parfaites en crudités ou rôties au four avec du miel de nos ruches.',              img:'https://images.unsplash.com/photo-1445282768818-728615cc910a?w=400&h=400&fit=crop' },
-  { id:3, name:'Fraises de saison',   name_en:'Seasonal strawberries',   farm:4, cat:'Fruits',         price:4.50,  unit:'400 g',  color:'#b82a40', desc:'Fraises Elsanta cueillies à maturité. Sucrées, parfumées, à consommer dans les 48 h.',                          img:'https://images.unsplash.com/photo-1464965911861-746a04b4bca6?w=400&h=400&fit=crop' },
-  { id:4, name:'Pommes Golden',       name_en:'Golden apples',           farm:3, cat:'Fruits',         price:3.20,  unit:'1 kg',   color:'#b88a10', desc:'Pommes Golden du verger de La Ferme Verte, croquantes et légèrement acidulées. Cueillie à la main.',             img:'https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?w=400&h=400&fit=crop' },
-  { id:5, name:'Poulet fermier',      name_en:'Free-range chicken',      farm:1, cat:'Viandes',        price:14.50, unit:'pièce',  color:'#8a4a18', desc:'Poulet élevé en plein air, nourri aux céréales locales. Label rouge. Idéal rôti au four avec des herbes fraîches.', img:'https://images.unsplash.com/photo-1587593810167-a84920ea0781?w=400&h=400&fit=crop' },
-  { id:6, name:'Œufs bio (×12)',      name_en:'Organic eggs (×12)',      farm:2, cat:'Œufs & Laitages', price:4.80,  unit:'boîte',  color:'#c89a10', desc:'Œufs de poules élevées en plein air, certifiés bio. Jaune intense et goût authentique.',                       img:'https://images.unsplash.com/photo-1582722872445-44dc5f7e3c8f?w=400&h=400&fit=crop' },
-  { id:7, name:'Fromage de chèvre',   name_en:'Goat cheese',             farm:3, cat:'Œufs & Laitages', price:5.50,  unit:'pièce',  color:'#8a7a5a', desc:'Fromage frais de chèvre affiné 10 jours. Onctueux, légèrement acidulé. Parfait sur une tartine grillée.',       img:'https://images.unsplash.com/photo-1486297678162-eb2a19b0a32d?w=400&h=400&fit=crop' },
-  { id:8, name:'Basilic frais',       name_en:'Fresh basil',             farm:4, cat:'Herbes',         price:1.80,  unit:'bouquet',color:'#2a6a2a', desc:'Basilic grand vert cultivé sous serre, récolté le matin. Parfum intense, idéal pour vos pestos maison.',          img:'https://images.unsplash.com/photo-1618375569909-3c8616cf7733?w=400&h=400&fit=crop' },
+  { id:1, name:'Tomates cerises bio', name_en:'Organic cherry tomatoes', farm:1, cat:'Légumes',        price:3.50,  unit:'500 g',  color:'#c8402a', desc:'Cultivées en plein champ à Lot, sans pesticides. Récoltées chaque matin, livrées le jour même à Bruxelles.', img:'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=400&h=400&fit=crop' },
+  { id:2, name:'Carottes nouvelles',  name_en:'Baby carrots',            farm:2, cat:'Légumes',        price:2.80,  unit:'1 kg',   color:'#d4621a', desc:'Carottes tendres de Braine-l\'Alleud. Parfaites en crudités ou rôties avec du miel local de nos ruches.',   img:'https://images.unsplash.com/photo-1445282768818-728615cc910a?w=400&h=400&fit=crop' },
+  { id:3, name:'Fraises de saison',   name_en:'Seasonal strawberries',   farm:4, cat:'Fruits',         price:4.50,  unit:'400 g',  color:'#b82a40', desc:'Fraises Elsanta cueillies à Overijse. Sucrées, parfumées, à consommer dans les 48 h après livraison.',       img:'https://images.unsplash.com/photo-1464965911861-746a04b4bca6?w=400&h=400&fit=crop' },
+  { id:4, name:'Pommes Golden',       name_en:'Golden apples',           farm:3, cat:'Fruits',         price:3.20,  unit:'1 kg',   color:'#b88a10', desc:'Pommes du verger de Linkebeek, à 11 km de Bruxelles. Cueillies à la main, croquantes et légèrement acidulées.', img:'https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?w=400&h=400&fit=crop' },
+  { id:5, name:'Poulet fermier',      name_en:'Free-range chicken',      farm:1, cat:'Viandes',        price:14.50, unit:'pièce',  color:'#8a4a18', desc:'Poulet élevé en plein air à Lot, nourri aux céréales locales. Label rouge. Idéal rôti avec des herbes fraîches.', img:'https://images.unsplash.com/photo-1587593810167-a84920ea0781?w=400&h=400&fit=crop' },
+  { id:6, name:'Œufs bio (×12)',      name_en:'Organic eggs (×12)',      farm:2, cat:'Œufs & Laitages', price:4.80,  unit:'boîte',  color:'#c89a10', desc:'Œufs de poules élevées en plein air à Braine-l\'Alleud. Certifiés bio, jaune intense et goût authentique.', img:'https://images.unsplash.com/photo-1582722872445-44dc5f7e3c8f?w=400&h=400&fit=crop' },
+  { id:7, name:'Fromage de chèvre',   name_en:'Goat cheese',             farm:3, cat:'Œufs & Laitages', price:5.50,  unit:'pièce',  color:'#8a7a5a', desc:'Fromage frais affiné 10 jours à Linkebeek. Onctueux, légèrement acidulé. Parfait sur une tartine grillée.', img:'https://images.unsplash.com/photo-1486297678162-eb2a19b0a32d?w=400&h=400&fit=crop' },
+  { id:8, name:'Basilic frais',       name_en:'Fresh basil',             farm:4, cat:'Herbes',         price:1.80,  unit:'bouquet',color:'#2a6a2a', desc:'Basilic grand vert d\'Overijse, récolté le matin. Parfum intense, idéal pour vos pestos maison.', img:'https://images.unsplash.com/photo-1618375569909-3c8616cf7733?w=400&h=400&fit=crop' },
 ];
 
 const CATS = ['Tout','Légumes','Fruits','Viandes','Œufs & Laitages','Herbes'];
 
 const SPLASH_SLIDES = [
-  { title:'Bienvenue sur\nFarmNow', sub:'Fresh produce delivered directly from partner farms near Brussels.', bg:'https://images.unsplash.com/photo-1464226184884-fa280b87c399?w=800&h=1000&fit=crop&crop=center' },
-  { title:'Récolté le matin,\nlivré le soir', sub:'Chaque produit quitte la ferme le jour de votre commande.', bg:'https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=800&h=1000&fit=crop&crop=center' },
-  { title:'Nos fermes\nà moins de 50 km', sub:'All our partner farms are located around Brussels.', bg:'https://images.unsplash.com/photo-1523348837708-15d4a09cfac2?w=800&h=1000&fit=crop&crop=center' },
+  { title:'Bienvenue sur\nFarmNow', sub:'Produits frais livrés en express depuis les fermes autour de Bruxelles.', bg:'https://images.unsplash.com/photo-1464226184884-fa280b87c399?w=800&h=1000&fit=crop&crop=center' },
+  { title:'Récolté le matin,\nlivré chez vous', sub:'Chaque produit quitte la ferme le jour de votre commande. Livraison express dans les 19 communes.', bg:'https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=800&h=1000&fit=crop&crop=center' },
+  { title:'Nos fermes\nà moins de 25 km', sub:'Toutes nos fermes partenaires sont situées autour de Bruxelles. Frais garanti.', bg:'https://images.unsplash.com/photo-1523348837708-15d4a09cfac2?w=800&h=1000&fit=crop&crop=center' },
 ];
 
 // ─── ICONS ────────────────────────────────────────────────────
 const IC = {
-  Home: ({c,s=24}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M3 12L12 4l9 8" stroke={c} strokeWidth="2" strokeLinecap="round"/><path d="M5 10v9a1 1 0 001 1h4v-5h4v5h4a1 1 0 001-1v-9" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>,
-  Search: ({c,s=24}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke={c} strokeWidth="2"/><path d="M16.5 16.5L21 21" stroke={c} strokeWidth="2" strokeLinecap="round"/></svg>,
-  Cart: ({c,s=24}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M2 3h2l2.5 10h11L20 7H6" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><circle cx="9" cy="20" r="1.5" fill={c}/><circle cx="17" cy="20" r="1.5" fill={c}/></svg>,
-  User: ({c,s=24}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke={c} strokeWidth="2"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke={c} strokeWidth="2" strokeLinecap="round"/></svg>,
-  Back: ({c=T.text,s=20}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke={c} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>,
-  Check: ({c=T.white,s=16}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 7" stroke={c} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>,
-  Star: ({s=12}) => <svg width={s} height={s} viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" fill="#f4b942" stroke="#f4b942" strokeWidth="1"/></svg>,
-  Pin: ({c=T.muted,s=12}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" stroke={c} strokeWidth="2"/><circle cx="12" cy="9" r="2.5" stroke={c} strokeWidth="2"/></svg>,
-  Trash: ({c='#d44',s=16}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>,
-  Leaf: ({c=T.green,s=14}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M12 22c0-6-4-10-10-10 0 6 4 10 10 10z" fill={c} opacity=".3"/><path d="M12 22C12 16 16 12 22 12c0 6-4 10-10 10z" fill={c}/><path d="M12 22V10" stroke={c} strokeWidth="1.5" strokeLinecap="round"/></svg>,
-  Truck: ({c=T.white,s=22}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><rect x="1" y="6" width="14" height="11" rx="1.5" stroke={c} strokeWidth="1.8"/><path d="M15 9h4l3 4v4h-7V9z" stroke={c} strokeWidth="1.8" strokeLinejoin="round"/><circle cx="5.5" cy="19.5" r="1.8" fill={c}/><circle cx="18.5" cy="19.5" r="1.8" fill={c}/></svg>,
-  Clock: ({c=T.muted,s=14}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke={c} strokeWidth="1.8"/><path d="M12 7v5l3 3" stroke={c} strokeWidth="1.8" strokeLinecap="round"/></svg>,
-  Card: ({c=T.green,s=22}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="2" stroke={c} strokeWidth="1.8"/><path d="M2 10h20" stroke={c} strokeWidth="1.8"/></svg>,
-  Bell: ({c=T.muted,s=20}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M18 8A6 6 0 106 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0" stroke={c} strokeWidth="1.8" strokeLinecap="round"/></svg>,
-  Heart: ({c=T.muted,s=20}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" stroke={c} strokeWidth="1.8"/></svg>,
+  Home:     ({c,s=24}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M3 12L12 4l9 8" stroke={c} strokeWidth="2" strokeLinecap="round"/><path d="M5 10v9a1 1 0 001 1h4v-5h4v5h4a1 1 0 001-1v-9" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  Search:   ({c,s=24}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke={c} strokeWidth="2"/><path d="M16.5 16.5L21 21" stroke={c} strokeWidth="2" strokeLinecap="round"/></svg>,
+  Cart:     ({c,s=24}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M2 3h2l2.5 10h11L20 7H6" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/><circle cx="9" cy="20" r="1.5" fill={c}/><circle cx="17" cy="20" r="1.5" fill={c}/></svg>,
+  User:     ({c,s=24}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><circle cx="12" cy="8" r="4" stroke={c} strokeWidth="2"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" stroke={c} strokeWidth="2" strokeLinecap="round"/></svg>,
+  Back:     ({c=T.text,s=20}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke={c} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  Check:    ({c=T.white,s=16}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 7" stroke={c} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  Star:     ({s=12}) => <svg width={s} height={s} viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" fill="#f4b942" stroke="#f4b942" strokeWidth="1"/></svg>,
+  Pin:      ({c=T.muted,s=12}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" stroke={c} strokeWidth="2"/><circle cx="12" cy="9" r="2.5" stroke={c} strokeWidth="2"/></svg>,
+  Trash:    ({c='#d44',s=16}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  Leaf:     ({c=T.green,s=14}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M12 22c0-6-4-10-10-10 0 6 4 10 10 10z" fill={c} opacity=".3"/><path d="M12 22C12 16 16 12 22 12c0 6-4 10-10 10z" fill={c}/><path d="M12 22V10" stroke={c} strokeWidth="1.5" strokeLinecap="round"/></svg>,
+  Truck:    ({c=T.white,s=22}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><rect x="1" y="6" width="14" height="11" rx="1.5" stroke={c} strokeWidth="1.8"/><path d="M15 9h4l3 4v4h-7V9z" stroke={c} strokeWidth="1.8" strokeLinejoin="round"/><circle cx="5.5" cy="19.5" r="1.8" fill={c}/><circle cx="18.5" cy="19.5" r="1.8" fill={c}/></svg>,
+  Clock:    ({c=T.muted,s=14}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke={c} strokeWidth="1.8"/><path d="M12 7v5l3 3" stroke={c} strokeWidth="1.8" strokeLinecap="round"/></svg>,
+  Card:     ({c=T.green,s=22}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><rect x="2" y="5" width="20" height="14" rx="2" stroke={c} strokeWidth="1.8"/><path d="M2 10h20" stroke={c} strokeWidth="1.8"/></svg>,
+  Bell:     ({c=T.muted,s=20}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M18 8A6 6 0 106 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0" stroke={c} strokeWidth="1.8" strokeLinecap="round"/></svg>,
+  Heart:    ({c=T.muted,s=20}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" stroke={c} strokeWidth="1.8"/></svg>,
   ChevronR: ({c=T.muted,s=14}) => <svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M9 18l6-6-6-6" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+  Lightning:({c=T.white,s=14}) => <svg width={s} height={s} viewBox="0 0 24 24" fill={c}><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg>,
 };
 
 // ─── SHARED ───────────────────────────────────────────────────
@@ -120,46 +201,92 @@ function Img({ src, style = {} }) {
   return <img src={src} style={{ objectFit:'cover', ...style }} loading="lazy" />;
 }
 
+// ─── COMPOSANT : BANNIÈRE EXPRESS ─────────────────────────────
+function ExpressBanner() {
+  const [countdown, setCountdown] = useState(getNextSlotCountdown());
+  const [tick, setTick] = useState(false);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setCountdown(getNextSlotCountdown());
+      setTick(t => !t);
+    }, 60000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (!countdown) return null;
+
+  const isUrgent = countdown.urgency === 'last';
+
+  return (
+    <div style={{
+      margin:'12px 16px 0', borderRadius:16, overflow:'hidden',
+      background: isUrgent
+        ? 'linear-gradient(135deg, #c8402a 0%, #e84c1e 100%)'
+        : 'linear-gradient(135deg, #3d5c35 0%, #5a7a4e 100%)',
+      padding:'12px 16px',
+      display:'flex', alignItems:'center', gap:12,
+      animation:'slide-up 0.4s ease',
+    }}>
+      {/* Dot clignotant */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+        <div style={{ width:8, height:8, borderRadius:'50%', background:'rgba(255,255,255,0.9)', animation:'pulse-dot 1.4s ease-in-out infinite' }}/>
+      </div>
+      <div style={{ flex:1 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:5, marginBottom:2 }}>
+          <IC.Lightning c="rgba(255,255,255,0.9)" s={11}/>
+          <span style={{ fontSize:10, fontWeight:800, color:'rgba(255,255,255,0.85)', letterSpacing:1.1, textTransform:'uppercase' }}>
+            {isUrgent ? 'Dernière chance !' : 'Livraison express'}
+          </span>
+        </div>
+        <div style={{ fontSize:13, fontWeight:700, color:'#fff', lineHeight:1.3 }}>
+          {countdown.label}
+        </div>
+      </div>
+      <div style={{ textAlign:'center', background:'rgba(0,0,0,0.18)', borderRadius:12, padding:'7px 12px', flexShrink:0 }}>
+        <div style={{ fontSize:18, fontWeight:900, color:'#fff', lineHeight:1, fontVariantNumeric:'tabular-nums' }}>
+          {countdown.h > 0 ? `${countdown.h}h${String(countdown.m).padStart(2,'0')}` : `${countdown.m}min`}
+        </div>
+        <div style={{ fontSize:9, color:'rgba(255,255,255,0.6)', marginTop:2, fontWeight:600 }}>pour commander</div>
+      </div>
+    </div>
+  );
+}
+
 // ─── 1. SPLASH ────────────────────────────────────────────────
 function SplashScreen({ onDone }) {
   const [step, setStep] = useState(0);
   const s = SPLASH_SLIDES[step];
   return (
     <div style={{ height:'100%', position:'relative', overflow:'hidden' }}>
-      {/* Background photo */}
       <Img src={s.bg} style={{ position:'absolute', inset:0, width:'100%', height:'100%' }}/>
-      {/* Dark gradient overlay */}
       <div style={{ position:'absolute', inset:0, background:'linear-gradient(to bottom, rgba(10,20,8,0.25) 0%, rgba(10,20,8,0.72) 60%, rgba(10,20,8,0.92) 100%)' }}/>
-
-      {/* Content */}
       <div style={{ position:'relative', zIndex:2, height:'100%', display:'flex', flexDirection:'column', justifyContent:'flex-end', padding:'0 28px 52px' }}>
-        {/* Logo pill */}
         <div style={{ position:'absolute', top:70, left:28, display:'flex', alignItems:'center', gap:10 }}>
           <div style={{ width:38, height:38, borderRadius:12, background:'rgba(255,255,255,0.18)', backdropFilter:'blur(8px)', display:'flex', alignItems:'center', justifyContent:'center' }}>
             <IC.Leaf c={T.white} s={20}/>
           </div>
           <span style={{ fontSize:18, fontWeight:800, color:T.white, letterSpacing:-0.3 }}>FarmNow</span>
+          <div style={{ background:'rgba(200,97,58,0.9)', borderRadius:8, padding:'2px 8px', display:'flex', alignItems:'center', gap:4 }}>
+            <IC.Lightning c="#fff" s={9}/>
+            <span style={{ fontSize:9, fontWeight:800, color:'#fff', letterSpacing:0.8 }}>EXPRESS</span>
+          </div>
         </div>
-
         <div style={{ fontSize:30, fontWeight:800, color:T.white, letterSpacing:-0.5, lineHeight:1.2, whiteSpace:'pre-line', marginBottom:12 }}>{s.title}</div>
         <div style={{ fontSize:15, color:'rgba(255,255,255,0.72)', lineHeight:1.6, marginBottom:36 }}>{s.sub}</div>
-
-        {/* Dots */}
         <div style={{ display:'flex', gap:7, marginBottom:28 }}>
           {SPLASH_SLIDES.map((_,i) => (
             <div key={i} style={{ height:4, width: i===step ? 28 : 8, borderRadius:2, background: i===step ? T.terra : 'rgba(255,255,255,0.35)', transition:'all 0.3s' }}/>
           ))}
         </div>
-
         <button onClick={() => step < SPLASH_SLIDES.length-1 ? setStep(step+1) : onDone()} style={{
           width:'100%', height:56, borderRadius:18, border:'none',
-          background:T.terra, fontSize:17, fontWeight:700, color:T.white, cursor:'pointer',
-          letterSpacing:0.1,
+          background:T.terra, fontSize:17, fontWeight:700, color:T.white, cursor:'pointer', letterSpacing:0.1,
         }}>
-          {step < SPLASH_SLIDES.length-1 ? 'Suivant' : 'Commencer / Get Started'}
+          {step < SPLASH_SLIDES.length-1 ? 'Suivant' : 'Commander maintenant'}
         </button>
         {step < SPLASH_SLIDES.length-1 && (
-          <div onClick={onDone} style={{ textAlign:'center', marginTop:16, color:'rgba(255,255,255,0.45)', fontSize:14, cursor:'pointer' }}>Passer / Skip</div>
+          <div onClick={onDone} style={{ textAlign:'center', marginTop:16, color:'rgba(255,255,255,0.45)', fontSize:14, cursor:'pointer' }}>Passer</div>
         )}
       </div>
     </div>
@@ -170,19 +297,28 @@ function SplashScreen({ onDone }) {
 function HomeScreen({ onProduct, cartCount, onNav }) {
   const [cat, setCat] = useState('Tout');
   const filtered = cat === 'Tout' ? PRODUCTS : PRODUCTS.filter(p => p.cat === cat);
+  const expressToday = isExpressAvailableToday();
 
   return (
     <div style={{ height:'100%', display:'flex', flexDirection:'column', background:T.cream }}>
       <div style={{ flex:1, overflowY:'auto' }}>
         {/* Header */}
-        <div style={{ background:T.green, padding:'64px 20px 20px' }}>
+        <div style={{ background:T.green, padding:'64px 20px 16px' }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
             <div>
               <div style={{ display:'flex', alignItems:'center', gap:5, marginBottom:2 }}>
                 <IC.Pin c="rgba(255,255,255,0.55)" s={12}/>
-                <span style={{ fontSize:12, color:'rgba(255,255,255,0.55)' }}>Bruxelles &amp; alentours</span>
+                <span style={{ fontSize:12, color:'rgba(255,255,255,0.55)' }}>Bruxelles & 19 communes</span>
               </div>
-              <div style={{ fontSize:22, fontWeight:800, color:T.white, letterSpacing:-0.3 }}>Bonjour, Marie</div>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <div style={{ fontSize:22, fontWeight:800, color:T.white, letterSpacing:-0.3 }}>Bonjour, Marie</div>
+                {expressToday && (
+                  <div style={{ background:'rgba(232,76,30,0.9)', borderRadius:8, padding:'2px 7px', display:'flex', alignItems:'center', gap:3 }}>
+                    <IC.Lightning c="#fff" s={9}/>
+                    <span style={{ fontSize:9, fontWeight:800, color:'#fff', letterSpacing:0.8 }}>EXPRESS</span>
+                  </div>
+                )}
+              </div>
             </div>
             <div style={{ position:'relative', cursor:'pointer' }} onClick={() => onNav('cart')}>
               <div style={{ width:44, height:44, borderRadius:14, background:'rgba(255,255,255,0.14)', display:'flex', alignItems:'center', justifyContent:'center' }}>
@@ -197,21 +333,24 @@ function HomeScreen({ onProduct, cartCount, onNav }) {
           </div>
         </div>
 
-        {/* Promo banner */}
-        <div style={{ margin:'16px 16px 0', borderRadius:18, overflow:'hidden', position:'relative', height:100 }}>
+        {/* Bannière express dynamique */}
+        <ExpressBanner />
+
+        {/* Promo livraison gratuite */}
+        <div style={{ margin:'12px 16px 0', borderRadius:18, overflow:'hidden', position:'relative', height:88 }}>
           <Img src="https://images.unsplash.com/photo-1488459716781-31db52582fe9?w=800&h=300&fit=crop&crop=center" style={{ position:'absolute', inset:0, width:'100%', height:'100%' }}/>
           <div style={{ position:'absolute', inset:0, background:'linear-gradient(to right, rgba(200,97,58,0.92) 50%, rgba(200,97,58,0.5) 100%)' }}/>
-          <div style={{ position:'relative', zIndex:1, padding:'18px 20px', display:'flex', justifyContent:'space-between', alignItems:'center', height:'100%' }}>
+          <div style={{ position:'relative', zIndex:1, padding:'14px 20px', display:'flex', justifyContent:'space-between', alignItems:'center', height:'100%' }}>
             <div>
-              <div style={{ fontSize:10, color:'rgba(255,255,255,0.8)', fontWeight:700, letterSpacing:1.2, textTransform:'uppercase', marginBottom:4 }}>Promotion</div>
-              <div style={{ fontSize:16, fontWeight:800, color:T.white, lineHeight:1.3 }}>Livraison gratuite<br/>dès €30 d'achat</div>
+              <div style={{ fontSize:10, color:'rgba(255,255,255,0.8)', fontWeight:700, letterSpacing:1.2, textTransform:'uppercase', marginBottom:3 }}>Promotion</div>
+              <div style={{ fontSize:15, fontWeight:800, color:T.white, lineHeight:1.3 }}>Livraison gratuite<br/>dès €30 d'achat</div>
             </div>
-            <IC.Truck c={T.white} s={40}/>
+            <IC.Truck c={T.white} s={38}/>
           </div>
         </div>
 
-        {/* Category filters */}
-        <div style={{ overflowX:'auto', display:'flex', gap:8, padding:'16px 16px 8px' }}>
+        {/* Filtres catégories */}
+        <div style={{ overflowX:'auto', display:'flex', gap:8, padding:'14px 16px 8px' }}>
           {CATS.map(c => (
             <div key={c} onClick={() => setCat(c)} style={{
               padding:'7px 16px', borderRadius:10, flexShrink:0, cursor:'pointer',
@@ -224,23 +363,28 @@ function HomeScreen({ onProduct, cartCount, onNav }) {
           ))}
         </div>
 
-        {/* Products */}
-        <div style={{ padding:'4px 16px 16px' }}>
+        {/* Produits */}
+        <div style={{ padding:'4px 16px 12px' }}>
           <div style={{ fontSize:15, fontWeight:700, color:T.text, marginBottom:12 }}>
             {cat === 'Tout' ? 'Produits du moment' : cat}
           </div>
           <div style={{ overflowX:'auto', display:'flex', gap:12, paddingBottom:4 }}>
             {filtered.map(p => (
-              <div key={p.id} onClick={() => onProduct(p)} style={{ background:T.white, borderRadius:18, overflow:'hidden', boxShadow:'0 2px 12px rgba(0,0,0,0.07)', cursor:'pointer', flexShrink:0, width:156 }}>
-                <div style={{ height:110, overflow:'hidden', position:'relative' }}>
+              <div key={p.id} onClick={() => onProduct(p)} style={{ width:148, flexShrink:0, background:T.white, borderRadius:16, overflow:'hidden', cursor:'pointer', boxShadow:'0 2px 8px rgba(0,0,0,0.06)' }}>
+                <div style={{ height:120, position:'relative', overflow:'hidden' }}>
                   <Img src={p.img} style={{ width:'100%', height:'100%' }}/>
+                  <div style={{ position:'absolute', top:8, right:8, background:'rgba(255,255,255,0.92)', borderRadius:7, padding:'2px 6px', display:'flex', alignItems:'center', gap:3 }}>
+                    <IC.Leaf c={T.green} s={10}/><span style={{ fontSize:9, fontWeight:700, color:T.green }}>Bio</span>
+                  </div>
                 </div>
-                <div style={{ padding:'10px 12px 12px' }}>
-                  <div style={{ fontSize:13, fontWeight:700, color:T.text, lineHeight:1.3, marginBottom:2 }}>{p.name}</div>
-                  <div style={{ fontSize:11, color:T.muted, marginBottom:8 }}>{FARMS.find(f=>f.id===p.farm)?.name}</div>
-                  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-                    <span style={{ fontSize:15, fontWeight:800, color:T.green }}>€{p.price.toFixed(2)}</span>
-                    <span style={{ fontSize:11, color:T.muted }}>{p.unit}</span>
+                <div style={{ padding:'10px' }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:T.text, marginBottom:2, lineHeight:1.3 }}>{p.name}</div>
+                  <div style={{ fontSize:11, color:T.muted, marginBottom:6 }}>{p.unit}</div>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                    <span style={{ fontSize:14, fontWeight:800, color:T.green }}>€{p.price.toFixed(2)}</span>
+                    <div style={{ width:26, height:26, borderRadius:8, background:T.terra, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                      <span style={{ fontSize:16, color:T.white, fontWeight:700, lineHeight:1 }}>+</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -248,21 +392,21 @@ function HomeScreen({ onProduct, cartCount, onNav }) {
           </div>
         </div>
 
-        {/* Partner farms */}
-        <div style={{ padding:'4px 16px 32px' }}>
+        {/* Fermes partenaires */}
+        <div style={{ padding:'4px 16px 100px' }}>
           <div style={{ fontSize:15, fontWeight:700, color:T.text, marginBottom:12 }}>Nos fermes partenaires</div>
           {FARMS.map(f => (
-            <div key={f.id} style={{ background:T.white, borderRadius:16, padding:'12px', marginBottom:10, display:'flex', alignItems:'center', gap:12, boxShadow:'0 1px 8px rgba(0,0,0,0.05)' }}>
-              <div style={{ width:52, height:52, borderRadius:14, overflow:'hidden', flexShrink:0 }}>
+            <div key={f.id} style={{ background:T.white, borderRadius:14, padding:'12px', marginBottom:10, display:'flex', gap:12, alignItems:'center', boxShadow:'0 1px 4px rgba(0,0,0,0.05)' }}>
+              <div style={{ width:52, height:52, borderRadius:12, overflow:'hidden', flexShrink:0 }}>
                 <Img src={f.img} style={{ width:'100%', height:'100%' }}/>
               </div>
               <div style={{ flex:1 }}>
-                <div style={{ fontSize:14, fontWeight:700, color:T.text }}>{f.name}</div>
-                <div style={{ fontSize:12, color:T.muted, display:'flex', alignItems:'center', gap:4, marginTop:2 }}>
-                  <IC.Pin c={T.muted} s={11}/> {f.location} · {f.distance}
+                <div style={{ fontSize:13, fontWeight:700, color:T.text }}>{f.name}</div>
+                <div style={{ fontSize:11, color:T.muted, display:'flex', alignItems:'center', gap:3, marginTop:2 }}>
+                  <IC.Pin c={T.muted} s={10}/>{f.location} · {f.distance}
                 </div>
               </div>
-              <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:3 }}>
                 <IC.Star s={13}/><span style={{ fontSize:12, fontWeight:700, color:T.text }}>{f.rating}</span>
               </div>
             </div>
@@ -280,6 +424,8 @@ function ProductScreen({ product, onBack, onAddToCart, cartItems }) {
   const inCart = cartItems.find(i => i.id === product.id);
   const [qty, setQty] = useState(inCart ? inCart.qty : 1);
   const [added, setAdded] = useState(false);
+  const slots = getDeliverySlots();
+  const nextSlot = slots[0];
 
   function handleAdd() {
     onAddToCart(product, qty);
@@ -289,7 +435,6 @@ function ProductScreen({ product, onBack, onAddToCart, cartItems }) {
 
   return (
     <div style={{ height:'100%', display:'flex', flexDirection:'column', background:T.white }}>
-      {/* Hero photo */}
       <div style={{ height:270, position:'relative', flexShrink:0, overflow:'hidden' }}>
         <Img src={product.img} style={{ width:'100%', height:'100%' }}/>
         <div style={{ position:'absolute', inset:0, background:'linear-gradient(to bottom, rgba(0,0,0,0.18) 0%, transparent 50%)' }}/>
@@ -306,8 +451,21 @@ function ProductScreen({ product, onBack, onAddToCart, cartItems }) {
         <div style={{ fontSize:24, fontWeight:800, color:T.text, letterSpacing:-0.3, lineHeight:1.2 }}>{product.name}</div>
         <div style={{ fontSize:13, color:T.muted, marginTop:2, marginBottom:12 }}>{product.name_en}</div>
 
-        {/* Farm card */}
-        <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 12px', background:T.tag, borderRadius:14 }}>
+        {/* Créneau express dispo */}
+        {nextSlot && (
+          <div style={{ background: nextSlot.urgency === 'last' ? '#fff0ec' : '#eef6ea', borderRadius:12, padding:'10px 14px', marginBottom:12, display:'flex', alignItems:'center', gap:8, border:`1px solid ${nextSlot.urgency === 'last' ? '#f5c0a8' : '#c8e0c0'}` }}>
+            <IC.Lightning c={nextSlot.urgency === 'last' ? T.express : T.green} s={14}/>
+            <div>
+              <div style={{ fontSize:12, fontWeight:700, color: nextSlot.urgency === 'last' ? T.express : T.green }}>
+                {nextSlot.urgency === 'last' ? 'Dernière chance aujourd\'hui !' : 'Livraison express disponible'}
+              </div>
+              <div style={{ fontSize:11, color:T.muted, marginTop:1 }}>Prochain créneau : {nextSlot.label}</div>
+            </div>
+          </div>
+        )}
+
+        {/* Ferme */}
+        <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 12px', background:T.tag, borderRadius:14, marginBottom:12 }}>
           <div style={{ width:42, height:42, borderRadius:12, overflow:'hidden', flexShrink:0 }}>
             <Img src={farm?.img} style={{ width:'100%', height:'100%' }}/>
           </div>
@@ -322,10 +480,9 @@ function ProductScreen({ product, onBack, onAddToCart, cartItems }) {
           </div>
         </div>
 
-        <div style={{ fontSize:14, color:'#4a4a3a', lineHeight:1.65, marginTop:14 }}>{product.desc}</div>
+        <div style={{ fontSize:14, color:'#4a4a3a', lineHeight:1.65 }}>{product.desc}</div>
       </div>
 
-      {/* Bottom bar */}
       <div style={{ padding:'14px 20px 20px', borderTop:`1px solid ${T.border}` }}>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
           <div>
@@ -344,7 +501,7 @@ function ProductScreen({ product, onBack, onAddToCart, cartItems }) {
           color:T.white, fontSize:16, fontWeight:700, cursor:'pointer',
           display:'flex', alignItems:'center', justifyContent:'center', gap:8, transition:'background 0.3s',
         }}>
-          {added ? <><IC.Check c={T.white} s={18}/> Ajouté au panier !</> : <>Ajouter au panier · €{(product.price * qty).toFixed(2)}</>}
+          {added ? <><IC.Check c={T.white} s={18}/> Ajouté !</> : <>Ajouter · €{(product.price * qty).toFixed(2)}</>}
         </button>
       </div>
     </div>
@@ -356,6 +513,8 @@ function CartScreen({ cartItems, onRemove, onChangeQty, onCheckout, onBack }) {
   const total = cartItems.reduce((s, i) => s + i.price * i.qty, 0);
   const deliveryFree = total >= 30;
   const delivery = deliveryFree ? 0 : 3.90;
+  const slots = getDeliverySlots();
+  const todaySlots = slots.filter(s => s.day === 'today');
 
   return (
     <div style={{ height:'100%', display:'flex', flexDirection:'column', background:T.cream }}>
@@ -374,11 +533,24 @@ function CartScreen({ cartItems, onRemove, onChangeQty, onCheckout, onBack }) {
               <IC.Cart c={T.muted} s={36}/>
             </div>
             <div style={{ fontSize:17, fontWeight:700, color:T.text, marginBottom:6 }}>Votre panier est vide</div>
-            <div style={{ fontSize:13, color:T.muted }}>Your cart is empty</div>
+            <div style={{ fontSize:13, color:T.muted }}>Ajoutez des produits frais pour commencer</div>
           </div>
         ) : (
           <div style={{ padding:'12px 16px' }}>
-            {/* Delivery progress */}
+            {/* Créneau express si dispo aujourd'hui */}
+            {todaySlots.length > 0 && (
+              <div style={{ background: todaySlots[0].urgency === 'last' ? '#fff0ec' : '#eef6ea', borderRadius:14, padding:'11px 14px', marginBottom:12, display:'flex', alignItems:'center', gap:8, border:`1.5px solid ${todaySlots[0].urgency === 'last' ? '#f5c0a8' : '#c8e0c0'}` }}>
+                <IC.Lightning c={todaySlots[0].urgency === 'last' ? T.express : T.green} s={16}/>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:12, fontWeight:700, color: todaySlots[0].urgency === 'last' ? T.express : T.green }}>
+                    {todaySlots[0].urgency === 'last' ? 'Dernière chance express aujourd\'hui !' : 'Livraison express possible aujourd\'hui !'}
+                  </div>
+                  <div style={{ fontSize:11, color:T.muted }}>Prochain créneau : {todaySlots[0].label}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Progress livraison gratuite */}
             {!deliveryFree ? (
               <div style={{ background:T.white, borderRadius:14, padding:'12px 14px', marginBottom:12 }}>
                 <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:8 }}>
@@ -402,18 +574,18 @@ function CartScreen({ cartItems, onRemove, onChangeQty, onCheckout, onBack }) {
                   <Img src={item.img} style={{ width:'100%', height:'100%' }}/>
                 </div>
                 <div style={{ flex:1 }}>
-                  <div style={{ fontSize:13, fontWeight:700, color:T.text, lineHeight:1.3 }}>{item.name}</div>
-                  <div style={{ fontSize:11, color:T.muted, marginTop:2 }}>{item.unit}</div>
-                  <div style={{ fontSize:14, fontWeight:800, color:T.green, marginTop:4 }}>€{(item.price * item.qty).toFixed(2)}</div>
-                </div>
-                <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8 }}>
-                  <div onClick={() => onRemove(item.id)} style={{ cursor:'pointer' }}><IC.Trash c="#d44" s={15}/></div>
-                  <div style={{ display:'flex', alignItems:'center', gap:10, background:T.tag, borderRadius:10, padding:'5px 10px' }}>
-                    <div onClick={() => onChangeQty(item.id, item.qty-1)} style={{ cursor:'pointer', fontWeight:700, color:T.green, fontSize:16, lineHeight:1 }}>−</div>
-                    <span style={{ fontSize:13, fontWeight:700 }}>{item.qty}</span>
-                    <div onClick={() => onChangeQty(item.id, item.qty+1)} style={{ cursor:'pointer', fontWeight:700, color:T.green, fontSize:16, lineHeight:1 }}>+</div>
+                  <div style={{ fontSize:13, fontWeight:700, color:T.text, marginBottom:2 }}>{item.name}</div>
+                  <div style={{ fontSize:12, color:T.muted, marginBottom:6 }}>{item.unit}</div>
+                  <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:10, background:T.tag, borderRadius:10, padding:'5px 10px' }}>
+                      <div onClick={() => onChangeQty(item.id, item.qty-1)} style={{ cursor:'pointer', fontSize:16, fontWeight:700, color:T.green, lineHeight:1 }}>−</div>
+                      <span style={{ fontSize:13, fontWeight:700, color:T.text, minWidth:14, textAlign:'center' }}>{item.qty}</span>
+                      <div onClick={() => onChangeQty(item.id, item.qty+1)} style={{ cursor:'pointer', fontSize:16, fontWeight:700, color:T.green, lineHeight:1 }}>+</div>
+                    </div>
+                    <span style={{ fontSize:14, fontWeight:800, color:T.green }}>€{(item.price*item.qty).toFixed(2)}</span>
                   </div>
                 </div>
+                <div onClick={() => onRemove(item.id)} style={{ cursor:'pointer', padding:6 }}><IC.Trash/></div>
               </div>
             ))}
           </div>
@@ -422,11 +594,11 @@ function CartScreen({ cartItems, onRemove, onChangeQty, onCheckout, onBack }) {
 
       {cartItems.length > 0 && (
         <div style={{ padding:'14px 16px 20px', background:T.white, borderTop:`1px solid ${T.border}`, flexShrink:0 }}>
-          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:8 }}>
             <span style={{ fontSize:13, color:T.muted }}>Sous-total</span>
             <span style={{ fontSize:13, color:T.text, fontWeight:600 }}>€{total.toFixed(2)}</span>
           </div>
-          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:14 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', marginBottom:12 }}>
             <span style={{ fontSize:13, color:T.muted }}>Livraison</span>
             <span style={{ fontSize:13, color: deliveryFree ? T.green : T.text, fontWeight:600 }}>{deliveryFree ? 'Gratuit' : '€3.90'}</span>
           </div>
@@ -434,8 +606,8 @@ function CartScreen({ cartItems, onRemove, onChangeQty, onCheckout, onBack }) {
             <span style={{ fontSize:16, fontWeight:800, color:T.text }}>Total</span>
             <span style={{ fontSize:18, fontWeight:800, color:T.green }}>€{(total + delivery).toFixed(2)}</span>
           </div>
-          <button onClick={onCheckout} style={{ width:'100%', height:54, borderRadius:16, border:'none', background:T.terra, color:T.white, fontSize:16, fontWeight:700, cursor:'pointer' }}>
-            Commander →
+          <button onClick={onCheckout} style={{ width:'100%', height:54, borderRadius:16, border:'none', background:T.terra, color:T.white, fontSize:16, fontWeight:700, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
+            <IC.Truck c={T.white} s={18}/> Commander →
           </button>
         </div>
       )}
@@ -445,12 +617,18 @@ function CartScreen({ cartItems, onRemove, onChangeQty, onCheckout, onBack }) {
 
 // ─── 5. CHECKOUT ──────────────────────────────────────────────
 function CheckoutScreen({ cartItems, onConfirm, onBack }) {
-  const [step, setStep] = useState(0);
-  const [slot, setSlot] = useState(0);
+  const [step, setStep]         = useState(0);
+  const [slot, setSlot]         = useState(null);
+  const [commune, setCommune]   = useState('');
+  const [rue, setRue]           = useState('');
   const [payMethod, setPayMethod] = useState(0);
-  const total = cartItems.reduce((s, i) => s + i.price * i.qty, 0);
+  const total    = cartItems.reduce((s, i) => s + i.price * i.qty, 0);
   const delivery = total >= 30 ? 0 : 3.90;
-  const slots = ['Aujourd\'hui  18h – 20h','Demain  9h – 11h','Demain  14h – 16h','Après-demain  10h – 12h'];
+
+  // Créneaux dynamiques selon l'heure réelle
+  const slots = getDeliverySlots();
+  const [selectedSlot, setSelectedSlot] = useState(slots.length > 0 ? 0 : null);
+
   const payMethods = [
     { label:'Carte bancaire', sub:'Visa / Mastercard', Icon: IC.Card },
     { label:'Bancontact',     sub:'Paiement local belge', Icon: IC.Card },
@@ -458,6 +636,7 @@ function CheckoutScreen({ cartItems, onConfirm, onBack }) {
   ];
 
   if (step === 2) {
+    const confirmedSlot = slots[selectedSlot] || slots[0];
     return (
       <div style={{ height:'100%', background:T.green, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:32, position:'relative', overflow:'hidden' }}>
         <div style={{ position:'absolute', top:-80, right:-80, width:280, height:280, borderRadius:'50%', background:'rgba(255,255,255,0.05)' }}/>
@@ -466,10 +645,10 @@ function CheckoutScreen({ cartItems, onConfirm, onBack }) {
           <IC.Check c={T.white} s={38}/>
         </div>
         <div style={{ fontSize:26, fontWeight:800, color:T.white, textAlign:'center', marginBottom:8, letterSpacing:-0.3 }}>Commande confirmée !</div>
-        <div style={{ fontSize:14, color:'rgba(255,255,255,0.65)', textAlign:'center', lineHeight:1.6, marginBottom:6 }}>Order confirmed!</div>
+        {commune && <div style={{ fontSize:13, color:'rgba(255,255,255,0.7)', textAlign:'center', marginBottom:6 }}>Livraison à {commune}</div>}
         <div style={{ fontSize:14, color:'rgba(255,255,255,0.75)', textAlign:'center', lineHeight:1.7, marginTop:6 }}>
-          Livraison prévue :<br/>
-          <strong style={{ color:T.white, fontSize:15 }}>{slots[slot]}</strong>
+          Créneau :<br/>
+          <strong style={{ color:T.white, fontSize:15 }}>{confirmedSlot ? confirmedSlot.label : '—'}</strong>
         </div>
         <div style={{ fontSize:34, fontWeight:800, color:T.white, marginTop:22 }}>€{(total + delivery).toFixed(2)}</div>
         <button onClick={onConfirm} style={{ marginTop:36, width:'100%', height:54, borderRadius:16, border:'none', background:T.terra, color:T.white, fontSize:16, fontWeight:700, cursor:'pointer' }}>
@@ -484,7 +663,7 @@ function CheckoutScreen({ cartItems, onConfirm, onBack }) {
       <div style={{ padding:'60px 20px 16px', background:T.white, borderBottom:`1px solid ${T.border}`, flexShrink:0 }}>
         <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:16 }}>
           <div onClick={onBack} style={{ cursor:'pointer' }}><IC.Back/></div>
-          <div style={{ fontSize:20, fontWeight:800, color:T.text }}>Livraison</div>
+          <div style={{ fontSize:20, fontWeight:800, color:T.text }}>Livraison Express</div>
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:6 }}>
           {['Adresse & créneau','Paiement'].map((s, i) => (
@@ -504,22 +683,73 @@ function CheckoutScreen({ cartItems, onConfirm, onBack }) {
       <div style={{ flex:1, overflowY:'auto', padding:'16px' }}>
         {step === 0 && (
           <div>
+            {/* Commune */}
             <div style={{ fontSize:14, fontWeight:700, color:T.text, marginBottom:10, display:'flex', alignItems:'center', gap:6 }}>
-              <IC.Pin c={T.green} s={14}/> Adresse de livraison
+              <IC.Pin c={T.green} s={14}/> Commune de livraison
             </div>
-            <input placeholder="Rue de la Loi 16, 1000 Bruxelles" style={{ width:'100%', height:46, borderRadius:14, border:`1.5px solid ${T.border}`, padding:'0 14px', fontSize:14, color:T.text, background:T.white, outline:'none', fontFamily:'inherit', marginBottom:18 }}/>
+            <div style={{ background:T.white, borderRadius:14, padding:'4px 6px', marginBottom:10, maxHeight:160, overflowY:'auto', display:'flex', flexWrap:'wrap', gap:6 }}>
+              {COMMUNES_BXL.map(c => (
+                <div key={c} onClick={() => setCommune(c)} style={{
+                  padding:'6px 12px', borderRadius:10, cursor:'pointer', fontSize:12, fontWeight:600,
+                  background: commune===c ? T.green : T.tag,
+                  color: commune===c ? T.white : T.text,
+                  border:`1.5px solid ${commune===c ? T.green : 'transparent'}`,
+                  transition:'all 0.2s',
+                }}>{c}</div>
+              ))}
+            </div>
 
+            {/* Rue */}
+            <input
+              placeholder="Rue et numéro"
+              value={rue}
+              onChange={e => setRue(e.target.value)}
+              style={{ width:'100%', height:46, borderRadius:14, border:`1.5px solid ${T.border}`, padding:'0 14px', fontSize:14, color:T.text, background:T.white, outline:'none', fontFamily:'inherit', marginBottom:18 }}
+            />
+
+            {/* Créneaux dynamiques */}
             <div style={{ fontSize:14, fontWeight:700, color:T.text, marginBottom:10, display:'flex', alignItems:'center', gap:6 }}>
               <IC.Clock c={T.green} s={14}/> Créneau de livraison
             </div>
-            {slots.map((s, i) => (
-              <div key={i} onClick={() => setSlot(i)} style={{ background:T.white, borderRadius:14, padding:'14px 16px', marginBottom:10, display:'flex', alignItems:'center', justifyContent:'space-between', border:`1.5px solid ${slot===i ? T.green : T.border}`, cursor:'pointer', transition:'border 0.2s' }}>
-                <span style={{ fontSize:14, color:T.text, fontWeight: slot===i ? 700 : 400 }}>{s}</span>
-                <div style={{ width:20, height:20, borderRadius:'50%', border:`2px solid ${slot===i ? T.green : T.border}`, background: slot===i ? T.green : 'transparent', display:'flex', alignItems:'center', justifyContent:'center' }}>
-                  {slot===i && <IC.Check c={T.white} s={10}/>}
-                </div>
+
+            {slots.length === 0 ? (
+              <div style={{ background:'#fff0ec', borderRadius:14, padding:'14px 16px', border:`1px solid #f5c0a8` }}>
+                <div style={{ fontSize:13, fontWeight:700, color:T.express, marginBottom:4 }}>Plus de livraison express ce soir</div>
+                <div style={{ fontSize:12, color:T.muted }}>Les créneaux du jour sont passés. Des créneaux seront disponibles demain à partir de 8h.</div>
               </div>
-            ))}
+            ) : (
+              slots.map((s, i) => (
+                <div key={i} onClick={() => setSelectedSlot(i)} style={{
+                  background:T.white, borderRadius:14, padding:'13px 16px', marginBottom:10,
+                  display:'flex', alignItems:'center', justifyContent:'space-between',
+                  border:`1.5px solid ${selectedSlot===i ? T.green : T.border}`,
+                  cursor:'pointer', transition:'border 0.2s',
+                }}>
+                  <div style={{ flex:1 }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:3 }}>
+                      <span style={{ fontSize:14, color:T.text, fontWeight: selectedSlot===i ? 700 : 400 }}>{s.label}</span>
+                      {s.urgency === 'last' && (
+                        <div style={{ background:'#fff0ec', borderRadius:6, padding:'1px 6px', display:'flex', alignItems:'center', gap:3 }}>
+                          <IC.Lightning c={T.express} s={9}/>
+                          <span style={{ fontSize:9, fontWeight:800, color:T.express }}>Dernière chance</span>
+                        </div>
+                      )}
+                      {s.urgency === 'soon' && (
+                        <div style={{ background:T.tag, borderRadius:6, padding:'1px 6px' }}>
+                          <span style={{ fontSize:9, fontWeight:700, color:T.green }}>Bientôt fermé</span>
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ fontSize:11, color:T.muted }}>
+                      {s.day === 'today' ? `Commandez avant ${s.cutoffH}h` : 'Disponible'}
+                    </div>
+                  </div>
+                  <div style={{ width:20, height:20, borderRadius:'50%', border:`2px solid ${selectedSlot===i ? T.green : T.border}`, background: selectedSlot===i ? T.green : 'transparent', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                    {selectedSlot===i && <IC.Check c={T.white} s={10}/>}
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         )}
 
@@ -543,8 +773,20 @@ function CheckoutScreen({ cartItems, onConfirm, onBack }) {
               </div>
             ))}
 
+            {/* Récap commande */}
             <div style={{ background:T.white, borderRadius:14, padding:'14px 16px', marginTop:8 }}>
               <div style={{ fontSize:14, fontWeight:700, color:T.text, marginBottom:10 }}>Récapitulatif</div>
+              {commune && (
+                <div style={{ fontSize:12, color:T.muted, marginBottom:8, display:'flex', alignItems:'center', gap:4 }}>
+                  <IC.Pin c={T.muted} s={10}/> {commune}
+                  {rue && ` · ${rue}`}
+                </div>
+              )}
+              {slots[selectedSlot] && (
+                <div style={{ fontSize:12, color:T.muted, marginBottom:10, display:'flex', alignItems:'center', gap:4 }}>
+                  <IC.Clock c={T.muted} s={10}/> {slots[selectedSlot].label}
+                </div>
+              )}
               {cartItems.map(i => (
                 <div key={i.id} style={{ display:'flex', justifyContent:'space-between', marginBottom:7, alignItems:'center', gap:8 }}>
                   <div style={{ width:32, height:32, borderRadius:8, overflow:'hidden', flexShrink:0 }}>
@@ -564,7 +806,15 @@ function CheckoutScreen({ cartItems, onConfirm, onBack }) {
       </div>
 
       <div style={{ padding:'14px 16px 20px', background:T.white, borderTop:`1px solid ${T.border}`, flexShrink:0 }}>
-        <button onClick={() => step < 1 ? setStep(1) : setStep(2)} style={{ width:'100%', height:54, borderRadius:16, border:'none', background:T.terra, color:T.white, fontSize:16, fontWeight:700, cursor:'pointer' }}>
+        <button
+          onClick={() => step < 1 ? setStep(1) : setStep(2)}
+          disabled={step === 0 && (slots.length === 0 || selectedSlot === null)}
+          style={{
+            width:'100%', height:54, borderRadius:16, border:'none',
+            background: (step === 0 && (slots.length === 0 || selectedSlot === null)) ? '#ccc' : T.terra,
+            color:T.white, fontSize:16, fontWeight:700, cursor:'pointer',
+            display:'flex', alignItems:'center', justifyContent:'center', gap:8,
+          }}>
           {step === 0 ? 'Continuer →' : 'Confirmer la commande'}
         </button>
       </div>
@@ -579,16 +829,15 @@ function ProfileScreen({ onNav }) {
     { id:'#FN-2798', date:'12 Avr 2026', items:'Poulet fermier, Œufs bio', total:'€19.30', status:'Livré' },
   ];
   const settings = [
-    { Icon:IC.Pin,   label:'Mes adresses',     sub:'Manage delivery addresses' },
-    { Icon:IC.Card,  label:'Paiement',          sub:'Payment methods' },
-    { Icon:IC.Bell,  label:'Notifications',     sub:'Delivery alerts & promos' },
-    { Icon:IC.Heart, label:'Fermes favorites',  sub:'Favourite farms' },
+    { Icon:IC.Pin,   label:'Mes adresses',     sub:'Communes de livraison' },
+    { Icon:IC.Card,  label:'Paiement',          sub:'Modes de paiement' },
+    { Icon:IC.Bell,  label:'Notifications',     sub:'Alertes créneaux & promos' },
+    { Icon:IC.Heart, label:'Fermes favorites',  sub:'Fermes sauvegardées' },
   ];
 
   return (
     <div style={{ height:'100%', display:'flex', flexDirection:'column', background:T.cream }}>
       <div style={{ flex:1, overflowY:'auto' }}>
-        {/* Header */}
         <div style={{ background:T.green, padding:'64px 20px 28px' }}>
           <div style={{ display:'flex', alignItems:'center', gap:16 }}>
             <div style={{ width:64, height:64, borderRadius:'50%', overflow:'hidden', border:'2.5px solid rgba(255,255,255,0.3)', flexShrink:0 }}>
@@ -596,7 +845,7 @@ function ProfileScreen({ onNav }) {
             </div>
             <div>
               <div style={{ fontSize:18, fontWeight:800, color:T.white }}>Marie Dubois</div>
-              <div style={{ fontSize:13, color:'rgba(255,255,255,0.6)', marginTop:2 }}>marie.dubois@gmail.com</div>
+              <div style={{ fontSize:13, color:'rgba(255,255,255,0.6)', marginTop:2 }}>Bruxelles-Ville</div>
             </div>
           </div>
           <div style={{ display:'flex', gap:0, marginTop:22, background:'rgba(255,255,255,0.1)', borderRadius:14, overflow:'hidden' }}>
