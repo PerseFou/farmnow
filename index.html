@@ -12,27 +12,45 @@
 * { margin:0; padding:0; box-sizing:border-box; }
 body { background:#ddd8cc; min-height:100vh; display:flex; align-items:center; justify-content:center; font-family:-apple-system,system-ui,sans-serif; }
 ::-webkit-scrollbar { display:none; }
-@keyframes pulse-dot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.6;transform:scale(.8)} }
-@keyframes slide-up { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
-@keyframes spin { to{transform:rotate(360deg)} }
-@keyframes fade-in { from{opacity:0} to{opacity:1} }
+@keyframes pulse-dot  { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.55;transform:scale(.78)} }
+@keyframes slide-up   { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
+@keyframes spin       { to{transform:rotate(360deg)} }
+@keyframes fade-in    { from{opacity:0} to{opacity:1} }
+@keyframes pop-in     { 0%{opacity:0;transform:scale(.88)} 60%{transform:scale(1.04)} 100%{opacity:1;transform:scale(1)} }
+@keyframes notif-slide{ from{opacity:0;transform:translateY(-28px)} to{opacity:1;transform:translateY(0)} }
+@keyframes progress   { from{width:0%} to{width:100%} }
+@keyframes blink-ring { 0%,100%{box-shadow:0 0 0 0 rgba(200,97,58,.55)} 50%{box-shadow:0 0 0 10px rgba(200,97,58,0)} }
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useEffect } = React;
-const T = { green:'#3d5c35', greenLight:'#5a7a4e', cream:'#f5f0e6', white:'#ffffff', terra:'#c8613a', text:'#1e2318', muted:'#7a7a68', border:'rgba(0,0,0,0.08)', tag:'#eef2eb', express:'#e84c1e', amber:'#d97706' };
+const { useState, useEffect, useRef } = React;
+const T = { green:'#3d5c35', greenLight:'#5a7a4e', cream:'#f5f0e6', white:'#fff', terra:'#c8613a', text:'#1e2318', muted:'#7a7a68', border:'rgba(0,0,0,0.08)', tag:'#eef2eb', express:'#e84c1e', amber:'#d97706' };
 
-// ─── GEO ──────────────────────────────────────────────────────
-function haversine(lat1,lon1,lat2,lon2){const R=6371,dL=(lat2-lat1)*Math.PI/180,dO=(lon2-lon1)*Math.PI/180,a=Math.sin(dL/2)**2+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dO/2)**2;return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));}
+// ─── GEO + DELIVERY TIME ──────────────────────────────────────
+function haversine(a,b,c,d){const R=6371,dL=(c-a)*Math.PI/180,dO=(d-b)*Math.PI/180,x=Math.sin(dL/2)**2+Math.cos(a*Math.PI/180)*Math.cos(c*Math.PI/180)*Math.sin(dO/2)**2;return R*2*Math.atan2(Math.sqrt(x),Math.sqrt(1-x));}
 const COURIER_KMH=25, PREP_MIN=5, MAX_KM=10;
 function delivMin(km){return Math.ceil(PREP_MIN+(km/COURIER_KMH)*60);}
 
-// ─── HEURE BRUXELLES ──────────────────────────────────────────
-function getBxlTime(){const s=new Date().toLocaleString('fr-BE',{timeZone:'Europe/Brussels',hour:'2-digit',minute:'2-digit',hour12:false});const[h,m]=s.split(':').map(Number);return{hour:h,minute:m,tot:h*60+m};}
-function getSlots(){const{tot}=getBxlTime();const ALL=[{label:"Aujourd'hui  12h–14h",day:'today',cH:10,cM:0},{label:"Aujourd'hui  17h–19h",day:'today',cH:15,cM:0},{label:"Aujourd'hui  19h–21h",day:'today',cH:17,cM:0},{label:"Demain  8h–10h",day:'tomorrow',cH:99,cM:0},{label:"Demain  12h–14h",day:'tomorrow',cH:99,cM:0},{label:"Demain  17h–19h",day:'tomorrow',cH:99,cM:0}];return ALL.map(s=>{if(s.day!=='today')return{...s,available:true,urgency:null};const left=s.cH*60+s.cM-tot;if(left<=0)return{...s,available:false,urgency:null};return{...s,available:true,urgency:left<=60?'last':left<=120?'soon':null};}).filter(s=>s.available);}
-function getCountdown(){const{tot}=getBxlTime();const sl=getSlots().filter(s=>s.day==='today');if(!sl.length)return null;const n=sl[0],diff=n.cH*60+n.cM-tot;if(diff<=0)return null;return{label:n.label,h:Math.floor(diff/60),m:diff%60,urgency:n.urgency};}
+// Heure Bruxelles réelle
+function getBxlNow(){
+  const now=new Date();
+  const s=now.toLocaleString('fr-BE',{timeZone:'Europe/Brussels',hour:'2-digit',minute:'2-digit',hour12:false});
+  const[h,m]=s.split(':').map(Number);
+  return {h,m,label:`${String(h).padStart(2,'0')}h${String(m).padStart(2,'0')}`};
+}
+// Heure d'arrivée = maintenant + X minutes
+function arrivalTime(addMin){
+  const now=new Date();
+  now.setMinutes(now.getMinutes()+addMin);
+  const s=now.toLocaleString('fr-BE',{timeZone:'Europe/Brussels',hour:'2-digit',minute:'2-digit',hour12:false});
+  const[h,m]=s.split(':').map(Number);
+  return `${String(h).padStart(2,'0')}h${String(m).padStart(2,'0')}`;
+}
+
+// Plage horaire de service : 7h–21h (Bruxelles)
+function isServiceOpen(){const{h}=getBxlNow();return h>=7&&h<21;}
 
 // ─── DATA ─────────────────────────────────────────────────────
 const FARMS=[
@@ -62,9 +80,9 @@ const PRODUCTS=[
 ];
 const CATS=['Tout','Légumes','Fruits','Viandes','Œufs & Laitages','Herbes'];
 const SPLASH=[
-  {title:'Bienvenue sur\nFarmNow',sub:'Produits frais livrés en 30 min depuis les fermes à moins de 10 km.',bg:'https://images.unsplash.com/photo-1464226184884-fa280b87c399?w=800&h=1000&fit=crop&crop=center'},
-  {title:'Récolté le matin,\nlivré en 30 min',sub:'Chaque produit quitte la ferme le jour de votre commande.',bg:'https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=800&h=1000&fit=crop&crop=center'},
-  {title:'Rayon 10 km\nautour de vous',sub:'Seules les fermes à moins de 10 km livrent chez vous. Hyper-local.',bg:'https://images.unsplash.com/photo-1523348837708-15d4a09cfac2?w=800&h=1000&fit=crop&crop=center'},
+  {title:'Bienvenue sur\nFarmNow',sub:'Produits frais des fermes autour de Bruxelles, livrés chez vous en moins de 30 min.',bg:'https://images.unsplash.com/photo-1464226184884-fa280b87c399?w=800&h=1000&fit=crop&crop=center'},
+  {title:'Commandez,\non arrive.',sub:'Pas de créneau à choisir. Commandez maintenant et votre livreur part immédiatement.',bg:'https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=800&h=1000&fit=crop&crop=center'},
+  {title:'Rayon 10 km\nautour de vous',sub:'Seules les fermes à moins de 10 km livrent chez vous. Hyper-local, ultra-frais.',bg:'https://images.unsplash.com/photo-1523348837708-15d4a09cfac2?w=800&h=1000&fit=crop&crop=center'},
 ];
 
 // ─── ICONS ────────────────────────────────────────────────────
@@ -89,12 +107,52 @@ const IC={
   GPS:({c=T.green,s=18})=><svg width={s} height={s} viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" fill={c}/><circle cx="12" cy="12" r="7" stroke={c} strokeWidth="1.8"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke={c} strokeWidth="1.8" strokeLinecap="round"/></svg>,
   Warning:({c=T.amber,s=18})=><svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M12 2L1 21h22L12 2z" stroke={c} strokeWidth="1.8" strokeLinejoin="round"/><path d="M12 9v5M12 17v.5" stroke={c} strokeWidth="2" strokeLinecap="round"/></svg>,
   Mail:({c=T.green,s=18})=><svg width={s} height={s} viewBox="0 0 24 24" fill="none"><rect x="2" y="4" width="20" height="16" rx="2" stroke={c} strokeWidth="1.8"/><path d="M2 8l10 7 10-7" stroke={c} strokeWidth="1.8" strokeLinecap="round"/></svg>,
+  Bike:({c=T.white,s=22})=><svg width={s} height={s} viewBox="0 0 24 24" fill="none"><circle cx="6" cy="16" r="3.5" stroke={c} strokeWidth="1.8"/><circle cx="18" cy="16" r="3.5" stroke={c} strokeWidth="1.8"/><path d="M6 16l4-8h4l3 8" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/><path d="M10 8l2 8" stroke={c} strokeWidth="1.8" strokeLinecap="round"/></svg>,
+  Phone:({c=T.white,s=18})=><svg width={s} height={s} viewBox="0 0 24 24" fill="none"><path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07A19.5 19.5 0 013.07 11 19.79 19.79 0 01.93 2.18 2 2 0 012.92 0h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L7.09 7.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z" stroke={c} strokeWidth="1.8"/></svg>,
 };
 
 // ─── SHARED ───────────────────────────────────────────────────
-function BottomNav({active,onNav,cartCount=0}){const tabs=[{id:'home',Icon:IC.Home,label:'Accueil'},{id:'search',Icon:IC.Search,label:'Explorer'},{id:'cart',Icon:IC.Cart,label:'Panier',badge:cartCount},{id:'profile',Icon:IC.User,label:'Profil'}];return(<div style={{display:'flex',background:T.white,borderTop:`1px solid ${T.border}`,paddingBottom:28,paddingTop:10,flexShrink:0}}>{tabs.map(t=>(<div key={t.id} onClick={()=>onNav(t.id)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:3,cursor:'pointer',position:'relative'}}><t.Icon c={active===t.id?T.green:'#c0c0b0'} s={22}/>{t.badge>0&&<div style={{position:'absolute',top:-2,right:'22%',width:16,height:16,borderRadius:'50%',background:T.terra,fontSize:9,fontWeight:800,color:T.white,display:'flex',alignItems:'center',justifyContent:'center'}}>{t.badge}</div>}<span style={{fontSize:10,color:active===t.id?T.green:'#c0c0b0',fontWeight:active===t.id?700:400}}>{t.label}</span></div>))}</div>);}
+function BottomNav({active,onNav,cartCount=0}){
+  const tabs=[{id:'home',Icon:IC.Home,label:'Accueil'},{id:'search',Icon:IC.Search,label:'Explorer'},{id:'cart',Icon:IC.Cart,label:'Panier',badge:cartCount},{id:'profile',Icon:IC.User,label:'Profil'}];
+  return(<div style={{display:'flex',background:T.white,borderTop:`1px solid ${T.border}`,paddingBottom:28,paddingTop:10,flexShrink:0}}>{tabs.map(t=>(<div key={t.id} onClick={()=>onNav(t.id)} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:3,cursor:'pointer',position:'relative'}}><t.Icon c={active===t.id?T.green:'#c0c0b0'} s={22}/>{t.badge>0&&<div style={{position:'absolute',top:-2,right:'22%',width:16,height:16,borderRadius:'50%',background:T.terra,fontSize:9,fontWeight:800,color:T.white,display:'flex',alignItems:'center',justifyContent:'center'}}>{t.badge}</div>}<span style={{fontSize:10,color:active===t.id?T.green:'#c0c0b0',fontWeight:active===t.id?700:400}}>{t.label}</span></div>))}</div>);
+}
 function Img({src,style={}}){return <img src={src} style={{objectFit:'cover',...style}} loading="lazy"/>;}
-function DBadge({km,style={}}){const m=delivMin(km);const c=m<=20?T.green:m<=30?T.amber:T.express;return(<div style={{display:'inline-flex',alignItems:'center',gap:4,background:'rgba(255,255,255,.92)',borderRadius:9,padding:'3px 8px',...style}}><IC.Clock c={c} s={11}/><span style={{fontSize:11,fontWeight:700,color:c}}>{m} min</span></div>);}
+
+// Badge "X min" coloré selon urgence
+function DBadge({km,style={}}){
+  const m=delivMin(km);
+  const c=m<=20?T.green:m<=30?T.amber:T.express;
+  return(<div style={{display:'inline-flex',alignItems:'center',gap:4,background:'rgba(255,255,255,.93)',borderRadius:9,padding:'3px 8px',...style}}><IC.Clock c={c} s={11}/><span style={{fontSize:11,fontWeight:800,color:c}}>{m} min</span></div>);
+}
+
+// ─── BANNIÈRE "LIVRAISON MAINTENANT" (remplace l'ancienne Express) ──
+function NowBanner({userPos,nearFarms}){
+  const[now,setNow]=useState(getBxlNow());
+  useEffect(()=>{const id=setInterval(()=>setNow(getBxlNow()),30000);return()=>clearInterval(id);},[]);
+  const open=isServiceOpen();
+  const fastest=nearFarms.length>0?delivMin(nearFarms[0].km):null;
+  if(!open) return(
+    <div style={{margin:'12px 16px 0',borderRadius:16,padding:'12px 16px',background:'#1e2318',display:'flex',alignItems:'center',gap:12}}>
+      <div style={{width:36,height:36,borderRadius:10,background:'rgba(255,255,255,.1)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><IC.Clock c="rgba(255,255,255,.6)" s={18}/></div>
+      <div><div style={{fontSize:13,fontWeight:700,color:T.white}}>Service fermé pour ce soir</div><div style={{fontSize:11,color:'rgba(255,255,255,.5)',marginTop:2}}>Disponible de 7h à 21h · Bruxelles</div></div>
+    </div>
+  );
+  return(
+    <div style={{margin:'12px 16px 0',borderRadius:16,padding:'14px 16px',background:'linear-gradient(135deg,#3d5c35 0%,#5a7a4e 100%)',display:'flex',alignItems:'center',gap:12,animation:'slide-up .4s ease'}}>
+      <div style={{width:8,height:8,borderRadius:'50%',background:'#a8f08a',animation:'pulse-dot 1.2s ease-in-out infinite',flexShrink:0}}/>
+      <div style={{flex:1}}>
+        <div style={{display:'flex',alignItems:'center',gap:5,marginBottom:2}}><IC.Lightning c="rgba(255,255,255,.85)" s={11}/><span style={{fontSize:10,fontWeight:800,color:'rgba(255,255,255,.8)',letterSpacing:1.1,textTransform:'uppercase'}}>Disponible maintenant</span></div>
+        <div style={{fontSize:14,fontWeight:700,color:T.white}}>
+          {fastest?`Livraison en ${fastest} min depuis la ferme la plus proche`:'Commandez, un coursier part immédiatement'}
+        </div>
+      </div>
+      <div style={{background:'rgba(0,0,0,.2)',borderRadius:12,padding:'7px 10px',textAlign:'center',flexShrink:0}}>
+        <div style={{fontSize:16,fontWeight:900,color:T.white,fontVariantNumeric:'tabular-nums'}}>{now.label}</div>
+        <div style={{fontSize:9,color:'rgba(255,255,255,.55)',fontWeight:600,marginTop:1}}>maintenant</div>
+      </div>
+    </div>
+  );
+}
 
 // ─── ÉCRAN GEO ────────────────────────────────────────────────
 function GeoScreen({onLocated}){
@@ -104,71 +162,28 @@ function GeoScreen({onLocated}){
   const[waitEmail,setWaitEmail]=useState('');
   const[waitSent,setWaitSent]=useState(false);
   const[outPos,setOutPos]=useState(null);
-
-  function checkCov({lat,lng,source,communeName}){
-    const inRange=FARMS.filter(f=>haversine(lat,lng,f.lat,f.lng)<=MAX_KM);
-    if(inRange.length===0){setOutPos({lat,lng,source,communeName});setStatus('out');return;}
-    onLocated({lat,lng,source,communeName});
-  }
+  function checkCov({lat,lng,source,communeName}){const inRange=FARMS.filter(f=>haversine(lat,lng,f.lat,f.lng)<=MAX_KM);if(inRange.length===0){setOutPos({lat,lng,source,communeName});setStatus('out');return;}onLocated({lat,lng,source,communeName});}
   function reqGPS(){setStatus('loading');if(!navigator.geolocation){setStatus('error');return;}navigator.geolocation.getCurrentPosition(p=>checkCov({lat:p.coords.latitude,lng:p.coords.longitude,source:'gps'}),()=>setStatus('error'),{timeout:8000});}
   function confirmCommune(){const c=COMMUNES.find(c=>c.name===commune);if(c)checkCov({lat:c.lat,lng:c.lng,source:'manual',communeName:c.name});}
   const filtered=COMMUNES.filter(c=>c.name.toLowerCase().includes(search.toLowerCase()));
-
   if(status==='out'){
-    if(waitSent)return(<div style={{height:'100%',background:T.green,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:32,animation:'fade-in .4s ease'}}><div style={{width:72,height:72,borderRadius:'50%',background:'rgba(255,255,255,.18)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:20}}><IC.Check c={T.white} s={34}/></div><div style={{fontSize:22,fontWeight:800,color:T.white,textAlign:'center',marginBottom:8}}>Vous êtes sur la liste !</div><div style={{fontSize:14,color:'rgba(255,255,255,.7)',textAlign:'center',lineHeight:1.7}}>Nous vous préviendrons dès que FarmNow est disponible dans votre zone.</div></div>);
-    return(
-      <div style={{height:'100%',display:'flex',flexDirection:'column',background:T.cream,animation:'fade-in .3s ease'}}>
-        <div style={{background:T.green,padding:'64px 24px 24px',flexShrink:0}}><div style={{display:'flex',alignItems:'center',gap:10}}><IC.Leaf c={T.white} s={22}/><span style={{fontSize:20,fontWeight:800,color:T.white}}>FarmNow</span></div></div>
-        <div style={{flex:1,overflowY:'auto',padding:24,display:'flex',flexDirection:'column',alignItems:'center'}}>
-          <div style={{width:80,height:80,borderRadius:'50%',background:'#fef3c7',border:'2px solid #fde68a',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:20,marginTop:16}}><IC.Warning c={T.amber} s={36}/></div>
-          <div style={{fontSize:20,fontWeight:800,color:T.text,textAlign:'center',marginBottom:10}}>Zone non couverte</div>
-          <div style={{fontSize:14,color:T.muted,textAlign:'center',lineHeight:1.7,marginBottom:24}}>Aucune de nos fermes partenaires ne se trouve à moins de 10 km de votre position pour le moment.<br/><br/>Laissez votre email et nous vous préviendrons dès que FarmNow arrive près de chez vous !</div>
-          <div style={{width:'100%',background:T.white,borderRadius:16,padding:'14px 16px',marginBottom:16}}>
-            <div style={{fontSize:12,fontWeight:700,color:T.text,marginBottom:10}}>Fermes les plus proches de vous</div>
-            {FARMS.map(f=>({...f,km:outPos?haversine(outPos.lat,outPos.lng,f.lat,f.lng):99})).sort((a,b)=>a.km-b.km).slice(0,3).map(f=>(
-              <div key={f.id} style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
-                <div style={{width:36,height:36,borderRadius:10,overflow:'hidden',flexShrink:0}}><Img src={f.img} style={{width:'100%',height:'100%'}}/></div>
-                <div style={{flex:1}}><div style={{fontSize:12,fontWeight:700,color:T.text}}>{f.name}</div><div style={{fontSize:11,color:T.muted}}>{f.location}</div></div>
-                <div style={{fontSize:12,fontWeight:700,color:T.muted}}>{f.km.toFixed(1)} km</div>
-              </div>
-            ))}
-          </div>
-          <div style={{width:'100%',background:T.white,borderRadius:16,padding:'16px'}}>
-            <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:12}}><IC.Mail c={T.green} s={16}/><span style={{fontSize:13,fontWeight:700,color:T.text}}>M'avertir quand disponible</span></div>
-            <input type="email" placeholder="votre@email.com" value={waitEmail} onChange={e=>setWaitEmail(e.target.value)} style={{width:'100%',height:44,borderRadius:12,border:`1.5px solid ${T.border}`,padding:'0 14px',fontSize:14,color:T.text,background:T.cream,outline:'none',fontFamily:'inherit',marginBottom:10}}/>
-            <button onClick={()=>waitEmail.includes('@')&&setWaitSent(true)} style={{width:'100%',height:48,borderRadius:14,border:'none',background:T.terra,color:T.white,fontSize:15,fontWeight:700,cursor:'pointer'}}>Me prévenir →</button>
-          </div>
-        </div>
-      </div>
-    );
+    if(waitSent)return(<div style={{height:'100%',background:T.green,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:32,animation:'fade-in .4s ease'}}><div style={{width:72,height:72,borderRadius:'50%',background:'rgba(255,255,255,.18)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:20}}><IC.Check c={T.white} s={34}/></div><div style={{fontSize:22,fontWeight:800,color:T.white,textAlign:'center',marginBottom:8}}>Vous êtes sur la liste !</div><div style={{fontSize:14,color:'rgba(255,255,255,.7)',textAlign:'center',lineHeight:1.7}}>Nous vous préviendrons dès que FarmNow arrive dans votre zone.</div></div>);
+    return(<div style={{height:'100%',display:'flex',flexDirection:'column',background:T.cream,animation:'fade-in .3s ease'}}><div style={{background:T.green,padding:'64px 24px 24px',flexShrink:0}}><div style={{display:'flex',alignItems:'center',gap:10}}><IC.Leaf c={T.white} s={22}/><span style={{fontSize:20,fontWeight:800,color:T.white}}>FarmNow</span></div></div><div style={{flex:1,overflowY:'auto',padding:24,display:'flex',flexDirection:'column',alignItems:'center'}}><div style={{width:80,height:80,borderRadius:'50%',background:'#fef3c7',border:'2px solid #fde68a',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:20,marginTop:16}}><IC.Warning c={T.amber} s={36}/></div><div style={{fontSize:20,fontWeight:800,color:T.text,textAlign:'center',marginBottom:10}}>Zone non couverte</div><div style={{fontSize:14,color:T.muted,textAlign:'center',lineHeight:1.7,marginBottom:24}}>Aucune ferme partenaire ne se trouve à moins de 10 km de votre position.<br/><br/>Laissez votre email et nous vous préviendrons dès que FarmNow arrive près de chez vous !</div><div style={{width:'100%',background:T.white,borderRadius:16,padding:'14px 16px',marginBottom:16}}><div style={{fontSize:12,fontWeight:700,color:T.text,marginBottom:10}}>Fermes les plus proches</div>{FARMS.map(f=>({...f,km:outPos?haversine(outPos.lat,outPos.lng,f.lat,f.lng):99})).sort((a,b)=>a.km-b.km).slice(0,3).map(f=>(<div key={f.id} style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}><div style={{width:36,height:36,borderRadius:10,overflow:'hidden',flexShrink:0}}><Img src={f.img} style={{width:'100%',height:'100%'}}/></div><div style={{flex:1}}><div style={{fontSize:12,fontWeight:700,color:T.text}}>{f.name}</div><div style={{fontSize:11,color:T.muted}}>{f.location}</div></div><div style={{fontSize:12,fontWeight:700,color:T.muted}}>{f.km.toFixed(1)} km</div></div>))}</div><div style={{width:'100%',background:T.white,borderRadius:16,padding:'16px'}}><div style={{display:'flex',alignItems:'center',gap:6,marginBottom:12}}><IC.Mail c={T.green} s={16}/><span style={{fontSize:13,fontWeight:700,color:T.text}}>M'avertir quand disponible</span></div><input type="email" placeholder="votre@email.com" value={waitEmail} onChange={e=>setWaitEmail(e.target.value)} style={{width:'100%',height:44,borderRadius:12,border:`1.5px solid ${T.border}`,padding:'0 14px',fontSize:14,color:T.text,background:T.cream,outline:'none',fontFamily:'inherit',marginBottom:10}}/><button onClick={()=>waitEmail.includes('@')&&setWaitSent(true)} style={{width:'100%',height:48,borderRadius:14,border:'none',background:T.terra,color:T.white,fontSize:15,fontWeight:700,cursor:'pointer'}}>Me prévenir →</button></div></div></div>);
   }
-
   return(
     <div style={{height:'100%',display:'flex',flexDirection:'column',background:T.cream}}>
-      <div style={{background:T.green,padding:'64px 24px 28px',flexShrink:0}}>
-        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}><IC.Leaf c={T.white} s={22}/><span style={{fontSize:20,fontWeight:800,color:T.white}}>FarmNow</span><div style={{background:'rgba(200,97,58,.9)',borderRadius:8,padding:'2px 8px',display:'flex',alignItems:'center',gap:3,marginLeft:4}}><IC.Lightning c="#fff" s={9}/><span style={{fontSize:9,fontWeight:800,color:'#fff',letterSpacing:.8}}>EXPRESS</span></div></div>
-        <div style={{fontSize:22,fontWeight:800,color:T.white,lineHeight:1.3,marginBottom:8}}>Où souhaitez-vous<br/>être livré ?</div>
-        <div style={{fontSize:13,color:'rgba(255,255,255,.65)'}}>Seules les fermes à moins de 10 km livrent chez vous en 30 min.</div>
-      </div>
+      <div style={{background:T.green,padding:'64px 24px 28px',flexShrink:0}}><div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}><IC.Leaf c={T.white} s={22}/><span style={{fontSize:20,fontWeight:800,color:T.white}}>FarmNow</span><div style={{background:'rgba(200,97,58,.9)',borderRadius:8,padding:'2px 8px',display:'flex',alignItems:'center',gap:3,marginLeft:4}}><IC.Lightning c="#fff" s={9}/><span style={{fontSize:9,fontWeight:800,color:'#fff',letterSpacing:.8}}>EXPRESS</span></div></div><div style={{fontSize:22,fontWeight:800,color:T.white,lineHeight:1.3,marginBottom:8}}>Où souhaitez-vous<br/>être livré ?</div><div style={{fontSize:13,color:'rgba(255,255,255,.65)'}}>Fermes à moins de 10 km · Livraison immédiate en max 30 min.</div></div>
       <div style={{flex:1,overflowY:'auto',padding:20}}>
-        <div onClick={()=>status!=='loading'&&reqGPS()} style={{background:status==='loading'?T.greenLight:T.green,borderRadius:16,padding:'18px 20px',marginBottom:14,display:'flex',alignItems:'center',gap:14,cursor:'pointer',animation:'slide-up .3s ease'}}>
-          {status==='loading'?(<div style={{width:40,height:40,borderRadius:'50%',border:'3px solid rgba(255,255,255,.3)',borderTopColor:'#fff',animation:'spin .8s linear infinite',flexShrink:0}}/>):(<div style={{width:40,height:40,borderRadius:12,background:'rgba(255,255,255,.15)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><IC.GPS c={T.white} s={20}/></div>)}
-          <div><div style={{fontSize:15,fontWeight:700,color:T.white}}>{status==='loading'?'Localisation en cours…':'Utiliser ma position GPS'}</div><div style={{fontSize:12,color:'rgba(255,255,255,.65)',marginTop:2}}>Recommandé — précis et instantané</div></div>
-        </div>
+        <div onClick={()=>status!=='loading'&&reqGPS()} style={{background:status==='loading'?T.greenLight:T.green,borderRadius:16,padding:'18px 20px',marginBottom:14,display:'flex',alignItems:'center',gap:14,cursor:'pointer',animation:'slide-up .3s ease'}}>{status==='loading'?(<div style={{width:40,height:40,borderRadius:'50%',border:'3px solid rgba(255,255,255,.3)',borderTopColor:'#fff',animation:'spin .8s linear infinite',flexShrink:0}}/>):(<div style={{width:40,height:40,borderRadius:12,background:'rgba(255,255,255,.15)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><IC.GPS c={T.white} s={20}/></div>)}<div><div style={{fontSize:15,fontWeight:700,color:T.white}}>{status==='loading'?'Localisation en cours…':'Utiliser ma position GPS'}</div><div style={{fontSize:12,color:'rgba(255,255,255,.65)',marginTop:2}}>Recommandé — précis et instantané</div></div></div>
         {status==='error'&&<div style={{background:'#fff3cd',borderRadius:12,padding:'10px 14px',marginBottom:14,fontSize:12,color:'#856404',animation:'slide-up .2s ease'}}>GPS non autorisé. Choisissez votre commune ci-dessous.</div>}
         <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:14}}><div style={{flex:1,height:1,background:T.border}}/><span style={{fontSize:12,color:T.muted,fontWeight:600}}>ou choisir manuellement</span><div style={{flex:1,height:1,background:T.border}}/></div>
         <div style={{background:T.white,borderRadius:14,padding:'0 14px',display:'flex',alignItems:'center',gap:10,height:44,marginBottom:12,border:`1.5px solid ${T.border}`}}><IC.Search c={T.muted} s={16}/><input placeholder="Rechercher votre commune…" value={search} onChange={e=>setSearch(e.target.value)} style={{flex:1,border:'none',outline:'none',fontSize:14,color:T.text,background:'transparent',fontFamily:'inherit'}}/></div>
-        <div style={{background:T.white,borderRadius:16,overflow:'hidden',marginBottom:16}}>
-          {filtered.map((c,i)=>(<div key={c.name} onClick={()=>setCommune(c.name)} style={{padding:'13px 16px',display:'flex',alignItems:'center',justifyContent:'space-between',borderBottom:i<filtered.length-1?`1px solid ${T.border}`:'none',cursor:'pointer',background:commune===c.name?T.tag:T.white}}><div style={{display:'flex',alignItems:'center',gap:10}}><IC.Pin c={commune===c.name?T.green:T.muted} s={13}/><span style={{fontSize:14,fontWeight:commune===c.name?700:400,color:T.text}}>{c.name}</span></div>{commune===c.name&&<IC.Check c={T.green} s={14}/>}</div>))}
-        </div>
+        <div style={{background:T.white,borderRadius:16,overflow:'hidden',marginBottom:16}}>{filtered.map((c,i)=>(<div key={c.name} onClick={()=>setCommune(c.name)} style={{padding:'13px 16px',display:'flex',alignItems:'center',justifyContent:'space-between',borderBottom:i<filtered.length-1?`1px solid ${T.border}`:'none',cursor:'pointer',background:commune===c.name?T.tag:T.white}}><div style={{display:'flex',alignItems:'center',gap:10}}><IC.Pin c={commune===c.name?T.green:T.muted} s={13}/><span style={{fontSize:14,fontWeight:commune===c.name?700:400,color:T.text}}>{c.name}</span></div>{commune===c.name&&<IC.Check c={T.green} s={14}/>}</div>))}</div>
         {commune&&<button onClick={confirmCommune} style={{width:'100%',height:52,borderRadius:16,border:'none',background:T.terra,color:T.white,fontSize:16,fontWeight:700,cursor:'pointer',animation:'slide-up .2s ease'}}>Confirmer — {commune} →</button>}
       </div>
     </div>
   );
 }
-
-// ─── BANNER EXPRESS ───────────────────────────────────────────
-function ExpressBanner(){const[cd,setCd]=useState(getCountdown());useEffect(()=>{const id=setInterval(()=>setCd(getCountdown()),60000);return()=>clearInterval(id);},[]);if(!cd)return null;const u=cd.urgency==='last';return(<div style={{margin:'12px 16px 0',borderRadius:16,padding:'12px 16px',background:u?'linear-gradient(135deg,#c8402a,#e84c1e)':'linear-gradient(135deg,#3d5c35,#5a7a4e)',display:'flex',alignItems:'center',gap:12,animation:'slide-up .4s ease'}}><div style={{width:8,height:8,borderRadius:'50%',background:'rgba(255,255,255,.9)',animation:'pulse-dot 1.4s ease-in-out infinite',flexShrink:0}}/><div style={{flex:1}}><div style={{display:'flex',alignItems:'center',gap:4,marginBottom:2}}><IC.Lightning c="rgba(255,255,255,.9)" s={10}/><span style={{fontSize:10,fontWeight:800,color:'rgba(255,255,255,.85)',letterSpacing:1.1,textTransform:'uppercase'}}>{u?'Dernière chance !':'Livraison express'}</span></div><div style={{fontSize:13,fontWeight:700,color:'#fff'}}>{cd.label}</div></div><div style={{background:'rgba(0,0,0,.18)',borderRadius:12,padding:'7px 12px',textAlign:'center',flexShrink:0}}><div style={{fontSize:18,fontWeight:900,color:'#fff',fontVariantNumeric:'tabular-nums'}}>{cd.h>0?`${cd.h}h${String(cd.m).padStart(2,'0')}`:`${cd.m}min`}</div><div style={{fontSize:9,color:'rgba(255,255,255,.6)',marginTop:1,fontWeight:600}}>pour commander</div></div></div>);}
 
 // ─── SPLASH ───────────────────────────────────────────────────
 function SplashScreen({onDone}){const[step,setStep]=useState(0);const s=SPLASH[step];return(<div style={{height:'100%',position:'relative',overflow:'hidden'}}><Img src={s.bg} style={{position:'absolute',inset:0,width:'100%',height:'100%'}}/><div style={{position:'absolute',inset:0,background:'linear-gradient(to bottom,rgba(10,20,8,.25) 0%,rgba(10,20,8,.72) 60%,rgba(10,20,8,.92) 100%)'}}/><div style={{position:'relative',zIndex:2,height:'100%',display:'flex',flexDirection:'column',justifyContent:'flex-end',padding:'0 28px 52px'}}><div style={{position:'absolute',top:70,left:28,display:'flex',alignItems:'center',gap:10}}><div style={{width:38,height:38,borderRadius:12,background:'rgba(255,255,255,.18)',backdropFilter:'blur(8px)',display:'flex',alignItems:'center',justifyContent:'center'}}><IC.Leaf c={T.white} s={20}/></div><span style={{fontSize:18,fontWeight:800,color:T.white}}>FarmNow</span><div style={{background:'rgba(200,97,58,.9)',borderRadius:8,padding:'2px 8px',display:'flex',alignItems:'center',gap:3}}><IC.Lightning c="#fff" s={9}/><span style={{fontSize:9,fontWeight:800,color:'#fff',letterSpacing:.8}}>EXPRESS</span></div></div><div style={{fontSize:30,fontWeight:800,color:T.white,letterSpacing:-.5,lineHeight:1.2,whiteSpace:'pre-line',marginBottom:12}}>{s.title}</div><div style={{fontSize:15,color:'rgba(255,255,255,.72)',lineHeight:1.6,marginBottom:36}}>{s.sub}</div><div style={{display:'flex',gap:7,marginBottom:28}}>{SPLASH.map((_,i)=><div key={i} style={{height:4,width:i===step?28:8,borderRadius:2,background:i===step?T.terra:'rgba(255,255,255,.35)',transition:'all .3s'}}/>)}</div><button onClick={()=>step<SPLASH.length-1?setStep(step+1):onDone()} style={{width:'100%',height:56,borderRadius:18,border:'none',background:T.terra,fontSize:17,fontWeight:700,color:T.white,cursor:'pointer'}}>{step<SPLASH.length-1?'Suivant':'Commencer'}</button>{step<SPLASH.length-1&&<div onClick={onDone} style={{textAlign:'center',marginTop:16,color:'rgba(255,255,255,.45)',fontSize:14,cursor:'pointer'}}>Passer</div>}</div></div>);}
@@ -176,55 +191,36 @@ function SplashScreen({onDone}){const[step,setStep]=useState(0);const s=SPLASH[s
 // ─── HOME ─────────────────────────────────────────────────────
 function HomeScreen({onProduct,cartCount,onNav,userPos}){
   const[cat,setCat]=useState('Tout');
+  const nearFarms=FARMS.map(f=>({...f,km:userPos?haversine(userPos.lat,userPos.lng,f.lat,f.lng):null})).filter(f=>f.km===null||f.km<=MAX_KM).sort((a,b)=>(a.km||0)-(b.km||0));
   const enrich=PRODUCTS.map(p=>{const f=FARMS.find(x=>x.id===p.farm);const km=userPos?haversine(userPos.lat,userPos.lng,f.lat,f.lng):null;return{...p,farm_obj:f,km,dMin:km!==null?delivMin(km):null};}).filter(p=>p.km===null||p.km<=MAX_KM);
   const filtered=cat==='Tout'?enrich:enrich.filter(p=>p.cat===cat);
-  const nearFarms=FARMS.map(f=>({...f,km:userPos?haversine(userPos.lat,userPos.lng,f.lat,f.lng):null})).filter(f=>f.km===null||f.km<=MAX_KM).sort((a,b)=>(a.km||0)-(b.km||0));
   const loc=userPos?.communeName||(userPos?.source==='gps'?'Votre position':'Bruxelles');
   return(
     <div style={{height:'100%',display:'flex',flexDirection:'column',background:T.cream}}>
       <div style={{flex:1,overflowY:'auto'}}>
         <div style={{background:T.green,padding:'64px 20px 16px'}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14}}>
-            <div>
-              <div style={{display:'flex',alignItems:'center',gap:5,marginBottom:2}}><IC.GPS c="rgba(255,255,255,.55)" s={11}/><span style={{fontSize:12,color:'rgba(255,255,255,.55)'}}>{loc}</span><span style={{fontSize:12,color:'rgba(255,255,255,.3)'}}>· ≤10 km</span></div>
-              <div style={{fontSize:22,fontWeight:800,color:T.white}}>Bonjour, Marie 👋</div>
-            </div>
-            <div style={{position:'relative',cursor:'pointer'}} onClick={()=>onNav('cart')}>
-              <div style={{width:44,height:44,borderRadius:14,background:'rgba(255,255,255,.14)',display:'flex',alignItems:'center',justifyContent:'center'}}><IC.Cart c={T.white} s={22}/></div>
-              {cartCount>0&&<div style={{position:'absolute',top:-4,right:-4,width:18,height:18,borderRadius:'50%',background:T.terra,fontSize:10,fontWeight:800,color:T.white,display:'flex',alignItems:'center',justifyContent:'center'}}>{cartCount}</div>}
-            </div>
+            <div><div style={{display:'flex',alignItems:'center',gap:5,marginBottom:2}}><IC.GPS c="rgba(255,255,255,.55)" s={11}/><span style={{fontSize:12,color:'rgba(255,255,255,.55)'}}>{loc}</span><span style={{fontSize:12,color:'rgba(255,255,255,.3)'}}>· ≤10 km</span></div><div style={{fontSize:22,fontWeight:800,color:T.white}}>Bonjour, Marie 👋</div></div>
+            <div style={{position:'relative',cursor:'pointer'}} onClick={()=>onNav('cart')}><div style={{width:44,height:44,borderRadius:14,background:'rgba(255,255,255,.14)',display:'flex',alignItems:'center',justifyContent:'center'}}><IC.Cart c={T.white} s={22}/></div>{cartCount>0&&<div style={{position:'absolute',top:-4,right:-4,width:18,height:18,borderRadius:'50%',background:T.terra,fontSize:10,fontWeight:800,color:T.white,display:'flex',alignItems:'center',justifyContent:'center'}}>{cartCount}</div>}</div>
           </div>
           <div style={{background:T.white,borderRadius:14,padding:'0 14px',display:'flex',alignItems:'center',gap:10,height:46}}><IC.Search c={T.muted} s={18}/><span style={{color:T.muted,fontSize:14}}>Chercher un produit ou une ferme…</span></div>
         </div>
-        <ExpressBanner/>
-        {/* Carte rayon */}
-        <div style={{margin:'12px 16px 0',background:T.white,borderRadius:14,padding:'11px 14px',display:'flex',alignItems:'center',gap:10}}>
+        <NowBanner userPos={userPos} nearFarms={nearFarms}/>
+        <div style={{margin:'10px 16px 0',background:T.white,borderRadius:14,padding:'11px 14px',display:'flex',alignItems:'center',gap:10}}>
           <div style={{width:36,height:36,borderRadius:10,background:T.tag,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><IC.Truck c={T.green} s={18}/></div>
-          <div><div style={{fontSize:12,fontWeight:700,color:T.text}}>{nearFarms.length} ferme{nearFarms.length>1?'s':''} dans votre rayon de 10 km</div><div style={{fontSize:11,color:T.muted}}>{nearFarms.length>0?`La plus proche : ${delivMin(nearFarms[0].km||2)} min`:'Aucune ferme disponible'}</div></div>
+          <div><div style={{fontSize:12,fontWeight:700,color:T.text}}>{nearFarms.length} ferme{nearFarms.length!==1?'s':''} dans votre rayon</div><div style={{fontSize:11,color:T.muted}}>{nearFarms.length>0?`Livraison la plus rapide : ${delivMin(nearFarms[0].km||2)} min`:'Aucune ferme disponible'}</div></div>
           <div style={{marginLeft:'auto',background:T.tag,borderRadius:8,padding:'4px 8px'}}><span style={{fontSize:12,fontWeight:800,color:T.green}}>≤ 10 km</span></div>
         </div>
-        <div style={{overflowX:'auto',display:'flex',gap:8,padding:'14px 16px 8px'}}>
-          {CATS.map(c=>(<div key={c} onClick={()=>setCat(c)} style={{padding:'7px 16px',borderRadius:10,flexShrink:0,cursor:'pointer',background:cat===c?T.green:T.white,color:cat===c?T.white:T.muted,fontWeight:cat===c?700:500,fontSize:13,border:`1px solid ${cat===c?T.green:T.border}`,transition:'all .2s'}}>{c}</div>))}
-        </div>
+        <div style={{overflowX:'auto',display:'flex',gap:8,padding:'14px 16px 8px'}}>{CATS.map(c=>(<div key={c} onClick={()=>setCat(c)} style={{padding:'7px 16px',borderRadius:10,flexShrink:0,cursor:'pointer',background:cat===c?T.green:T.white,color:cat===c?T.white:T.muted,fontWeight:cat===c?700:500,fontSize:13,border:`1px solid ${cat===c?T.green:T.border}`,transition:'all .2s'}}>{c}</div>))}</div>
         <div style={{padding:'4px 16px 12px'}}>
-          <div style={{fontSize:15,fontWeight:700,color:T.text,marginBottom:12}}>{cat==='Tout'?'Produits disponibles près de vous':cat}<span style={{fontSize:12,fontWeight:500,color:T.muted,marginLeft:8}}>{filtered.length} article{filtered.length>1?'s':''}</span></div>
+          <div style={{fontSize:15,fontWeight:700,color:T.text,marginBottom:12}}>{cat==='Tout'?'Produits près de vous':cat}<span style={{fontSize:12,fontWeight:500,color:T.muted,marginLeft:8}}>{filtered.length} article{filtered.length!==1?'s':''}</span></div>
           {filtered.length===0?(<div style={{textAlign:'center',padding:'24px 0',color:T.muted,fontSize:13}}>Aucun produit disponible dans cette catégorie près de vous.</div>):(
-            <div style={{overflowX:'auto',display:'flex',gap:12,paddingBottom:4}}>
-              {filtered.map(p=>(<div key={p.id} onClick={()=>onProduct(p)} style={{width:152,flexShrink:0,background:T.white,borderRadius:16,overflow:'hidden',cursor:'pointer',boxShadow:'0 2px 8px rgba(0,0,0,.06)'}}>
-                <div style={{height:120,position:'relative',overflow:'hidden'}}><Img src={p.img} style={{width:'100%',height:'100%'}}/>{p.km!==null&&<DBadge km={p.km} style={{position:'absolute',bottom:7,left:7}}/>}<div style={{position:'absolute',top:7,right:7,background:'rgba(255,255,255,.92)',borderRadius:7,padding:'2px 6px',display:'flex',alignItems:'center',gap:3}}><IC.Leaf c={T.green} s={10}/><span style={{fontSize:9,fontWeight:700,color:T.green}}>Bio</span></div></div>
-                <div style={{padding:'10px'}}><div style={{fontSize:12,fontWeight:700,color:T.text,marginBottom:2,lineHeight:1.3}}>{p.name}</div><div style={{fontSize:11,color:T.muted,marginBottom:6}}>{p.unit}</div><div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><span style={{fontSize:14,fontWeight:800,color:T.green}}>€{p.price.toFixed(2)}</span><div style={{width:26,height:26,borderRadius:8,background:T.terra,display:'flex',alignItems:'center',justifyContent:'center'}}><span style={{fontSize:16,color:T.white,fontWeight:700,lineHeight:1}}>+</span></div></div></div>
-              </div>))}
-            </div>
+            <div style={{overflowX:'auto',display:'flex',gap:12,paddingBottom:4}}>{filtered.map(p=>(<div key={p.id} onClick={()=>onProduct(p)} style={{width:152,flexShrink:0,background:T.white,borderRadius:16,overflow:'hidden',cursor:'pointer',boxShadow:'0 2px 8px rgba(0,0,0,.06)'}}><div style={{height:120,position:'relative',overflow:'hidden'}}><Img src={p.img} style={{width:'100%',height:'100%'}}/>{p.km!==null&&<DBadge km={p.km} style={{position:'absolute',bottom:7,left:7}}/>}<div style={{position:'absolute',top:7,right:7,background:'rgba(255,255,255,.92)',borderRadius:7,padding:'2px 6px',display:'flex',alignItems:'center',gap:3}}><IC.Leaf c={T.green} s={10}/><span style={{fontSize:9,fontWeight:700,color:T.green}}>Bio</span></div></div><div style={{padding:'10px'}}><div style={{fontSize:12,fontWeight:700,color:T.text,marginBottom:2,lineHeight:1.3}}>{p.name}</div><div style={{fontSize:11,color:T.muted,marginBottom:6}}>{p.unit}</div><div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><span style={{fontSize:14,fontWeight:800,color:T.green}}>€{p.price.toFixed(2)}</span><div style={{width:26,height:26,borderRadius:8,background:T.terra,display:'flex',alignItems:'center',justifyContent:'center'}}><span style={{fontSize:16,color:T.white,fontWeight:700,lineHeight:1}}>+</span></div></div></div></div>))}</div>
           )}
         </div>
         <div style={{padding:'4px 16px 100px'}}>
           <div style={{fontSize:15,fontWeight:700,color:T.text,marginBottom:12}}>Fermes dans votre rayon</div>
-          {nearFarms.length===0&&<div style={{fontSize:13,color:T.muted,textAlign:'center',padding:'12px 0'}}>Aucune ferme dans les 10 km.</div>}
-          {nearFarms.map(f=>{const dm=f.km!==null?delivMin(f.km):null;return(<div key={f.id} style={{background:T.white,borderRadius:14,padding:'12px',marginBottom:10,display:'flex',gap:12,alignItems:'center',boxShadow:'0 1px 4px rgba(0,0,0,.05)'}}>
-            <div style={{width:52,height:52,borderRadius:12,overflow:'hidden',flexShrink:0}}><Img src={f.img} style={{width:'100%',height:'100%'}}/></div>
-            <div style={{flex:1}}><div style={{fontSize:13,fontWeight:700,color:T.text}}>{f.name}</div><div style={{fontSize:11,color:T.muted,display:'flex',alignItems:'center',gap:3,marginTop:2}}><IC.Pin c={T.muted} s={10}/>{f.location}{f.km!==null&&<span>· {f.km.toFixed(1)} km</span>}</div></div>
-            <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}><div style={{display:'flex',alignItems:'center',gap:3}}><IC.Star s={12}/><span style={{fontSize:12,fontWeight:700}}>{f.rating}</span></div>{dm&&<div style={{fontSize:11,fontWeight:700,color:dm<=20?T.green:dm<=30?T.amber:T.express}}>{dm} min</div>}</div>
-          </div>);})}
+          {nearFarms.map(f=>{const dm=f.km!==null?delivMin(f.km):null;return(<div key={f.id} style={{background:T.white,borderRadius:14,padding:'12px',marginBottom:10,display:'flex',gap:12,alignItems:'center',boxShadow:'0 1px 4px rgba(0,0,0,.05)'}}><div style={{width:52,height:52,borderRadius:12,overflow:'hidden',flexShrink:0}}><Img src={f.img} style={{width:'100%',height:'100%'}}/></div><div style={{flex:1}}><div style={{fontSize:13,fontWeight:700,color:T.text}}>{f.name}</div><div style={{fontSize:11,color:T.muted,display:'flex',alignItems:'center',gap:3,marginTop:2}}><IC.Pin c={T.muted} s={10}/>{f.location}{f.km!==null&&<span>· {f.km.toFixed(1)} km</span>}</div></div><div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4}}><div style={{display:'flex',alignItems:'center',gap:3}}><IC.Star s={12}/><span style={{fontSize:12,fontWeight:700}}>{f.rating}</span></div>{dm&&<div style={{fontSize:11,fontWeight:700,color:dm<=20?T.green:dm<=30?T.amber:T.express}}>{dm} min</div>}</div></div>);})}
         </div>
       </div>
       <BottomNav active="home" onNav={onNav} cartCount={cartCount}/>
@@ -237,44 +233,32 @@ function ProductScreen({product,onBack,onAddToCart,cartItems,userPos}){
   const farm=FARMS.find(f=>f.id===product.farm);
   const km=userPos&&farm?haversine(userPos.lat,userPos.lng,farm.lat,farm.lng):null;
   const dm=km!==null?delivMin(km):null;
-  const inCart=cartItems.find(i=>i.id===product.id);
-  const[qty,setQty]=useState(inCart?inCart.qty:1);
+  const arrival=dm!==null?arrivalTime(dm):null;
+  const[qty,setQty]=useState(1);
   const[added,setAdded]=useState(false);
-  const nextSlot=getSlots()[0];
   function handleAdd(){onAddToCart(product,qty);setAdded(true);setTimeout(()=>setAdded(false),1600);}
   return(
     <div style={{height:'100%',display:'flex',flexDirection:'column',background:T.white}}>
-      <div style={{height:260,position:'relative',flexShrink:0,overflow:'hidden'}}>
-        <Img src={product.img} style={{width:'100%',height:'100%'}}/>
-        <div style={{position:'absolute',inset:0,background:'linear-gradient(to bottom,rgba(0,0,0,.18) 0%,transparent 50%)'}}/>
-        <div onClick={onBack} style={{position:'absolute',top:58,left:16,width:40,height:40,borderRadius:12,background:'rgba(255,255,255,.9)',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',boxShadow:'0 2px 8px rgba(0,0,0,.12)'}}><IC.Back/></div>
-        {dm!==null&&(<div style={{position:'absolute',bottom:14,left:16,background:dm<=30?T.green:T.amber,borderRadius:12,padding:'6px 12px',display:'flex',alignItems:'center',gap:6}}><IC.Clock c={T.white} s={13}/><span style={{fontSize:13,fontWeight:800,color:T.white}}>{dm} min</span><span style={{fontSize:11,color:'rgba(255,255,255,.7)'}}>· {km.toFixed(1)} km</span></div>)}
+      <div style={{height:260,position:'relative',flexShrink:0,overflow:'hidden'}}><Img src={product.img} style={{width:'100%',height:'100%'}}/><div style={{position:'absolute',inset:0,background:'linear-gradient(to bottom,rgba(0,0,0,.18) 0%,transparent 50%)'}}/><div onClick={onBack} style={{position:'absolute',top:58,left:16,width:40,height:40,borderRadius:12,background:'rgba(255,255,255,.9)',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',boxShadow:'0 2px 8px rgba(0,0,0,.12)'}}><IC.Back/></div>
+        {dm!==null&&(<div style={{position:'absolute',bottom:14,left:16,background:dm<=30?T.green:T.amber,borderRadius:12,padding:'6px 14px',display:'flex',alignItems:'center',gap:7}}><IC.Clock c={T.white} s={13}/><span style={{fontSize:13,fontWeight:800,color:T.white}}>{dm} min</span><div style={{width:1,height:14,background:'rgba(255,255,255,.35)'}}/><span style={{fontSize:13,fontWeight:700,color:'rgba(255,255,255,.85)'}}>avant {arrival}</span></div>)}
         <div style={{position:'absolute',top:58,right:16,background:T.tag,borderRadius:10,padding:'5px 10px',display:'flex',alignItems:'center',gap:5}}><IC.Leaf c={T.green} s={14}/><span style={{fontSize:12,fontWeight:700,color:T.green}}>Bio</span></div>
       </div>
       <div style={{flex:1,overflowY:'auto',padding:'18px 20px 0'}}>
         <div style={{fontSize:10,letterSpacing:1.5,fontWeight:700,color:T.terra,textTransform:'uppercase',marginBottom:4}}>{product.cat}</div>
         <div style={{fontSize:24,fontWeight:800,color:T.text,letterSpacing:-.3,lineHeight:1.2}}>{product.name}</div>
         <div style={{fontSize:13,color:T.muted,marginTop:2,marginBottom:12}}>{product.name_en}</div>
-        {nextSlot&&(<div style={{background:nextSlot.urgency==='last'?'#fff0ec':T.tag,borderRadius:12,padding:'10px 14px',marginBottom:12,display:'flex',alignItems:'center',gap:8,border:`1px solid ${nextSlot.urgency==='last'?'#f5c0a8':'#c8e0c0'}`}}><IC.Lightning c={nextSlot.urgency==='last'?T.express:T.green} s={14}/><div><div style={{fontSize:12,fontWeight:700,color:nextSlot.urgency==='last'?T.express:T.green}}>{nextSlot.urgency==='last'?"Dernière chance aujourd'hui !":'Express disponible'}</div><div style={{fontSize:11,color:T.muted}}>Créneau : {nextSlot.label}</div></div></div>)}
-        <div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',background:T.tag,borderRadius:14,marginBottom:12}}>
-          <div style={{width:42,height:42,borderRadius:12,overflow:'hidden',flexShrink:0}}><Img src={farm?.img} style={{width:'100%',height:'100%'}}/></div>
-          <div style={{flex:1}}><div style={{fontSize:13,fontWeight:700,color:T.text}}>{farm?.name}</div><div style={{fontSize:11,color:T.muted,display:'flex',alignItems:'center',gap:3,marginTop:1}}><IC.Pin c={T.muted} s={10}/>{farm?.location}{km!==null&&<span>· {km.toFixed(1)} km de vous</span>}</div></div>
-          <div style={{display:'flex',alignItems:'center',gap:3}}><IC.Star s={12}/><span style={{fontSize:12,fontWeight:700}}>{farm?.rating}</span></div>
-        </div>
+        {/* Livraison immédiate pill */}
+        {dm!==null&&isServiceOpen()&&(<div style={{background:T.tag,borderRadius:12,padding:'10px 14px',marginBottom:12,display:'flex',alignItems:'center',gap:8,border:`1px solid #c8e0c0`}}><IC.Bike c={T.green} s={16}/><div><div style={{fontSize:12,fontWeight:700,color:T.green}}>Livraison immédiate disponible</div><div style={{fontSize:11,color:T.muted,marginTop:1}}>Commandez maintenant → livré avant <strong style={{color:T.green}}>{arrival}</strong></div></div></div>)}
+        {!isServiceOpen()&&(<div style={{background:'#f5f5f0',borderRadius:12,padding:'10px 14px',marginBottom:12,display:'flex',alignItems:'center',gap:8,border:`1px solid ${T.border}`}}><IC.Clock c={T.muted} s={14}/><div style={{fontSize:12,color:T.muted}}>Service disponible de <strong>7h à 21h</strong></div></div>)}
+        <div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',background:T.tag,borderRadius:14,marginBottom:12}}><div style={{width:42,height:42,borderRadius:12,overflow:'hidden',flexShrink:0}}><Img src={farm?.img} style={{width:'100%',height:'100%'}}/></div><div style={{flex:1}}><div style={{fontSize:13,fontWeight:700,color:T.text}}>{farm?.name}</div><div style={{fontSize:11,color:T.muted,display:'flex',alignItems:'center',gap:3,marginTop:1}}><IC.Pin c={T.muted} s={10}/>{farm?.location}{km!==null&&<span>· {km.toFixed(1)} km</span>}</div></div><div style={{display:'flex',alignItems:'center',gap:3}}><IC.Star s={12}/><span style={{fontSize:12,fontWeight:700}}>{farm?.rating}</span></div></div>
         <div style={{fontSize:14,color:'#4a4a3a',lineHeight:1.65}}>{product.desc}</div>
       </div>
       <div style={{padding:'14px 20px 20px',borderTop:`1px solid ${T.border}`}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
           <div><span style={{fontSize:26,fontWeight:800,color:T.green}}>€{product.price.toFixed(2)}</span><span style={{fontSize:13,color:T.muted,marginLeft:4}}>/ {product.unit}</span></div>
-          <div style={{display:'flex',alignItems:'center',gap:14,background:T.tag,borderRadius:14,padding:'8px 14px'}}>
-            <div onClick={()=>setQty(Math.max(1,qty-1))} style={{cursor:'pointer',fontSize:20,fontWeight:700,color:T.green,lineHeight:1}}>−</div>
-            <span style={{fontSize:16,fontWeight:700,color:T.text,minWidth:18,textAlign:'center'}}>{qty}</span>
-            <div onClick={()=>setQty(qty+1)} style={{cursor:'pointer',fontSize:20,fontWeight:700,color:T.green,lineHeight:1}}>+</div>
-          </div>
+          <div style={{display:'flex',alignItems:'center',gap:14,background:T.tag,borderRadius:14,padding:'8px 14px'}}><div onClick={()=>setQty(Math.max(1,qty-1))} style={{cursor:'pointer',fontSize:20,fontWeight:700,color:T.green}}>−</div><span style={{fontSize:16,fontWeight:700,color:T.text,minWidth:18,textAlign:'center'}}>{qty}</span><div onClick={()=>setQty(qty+1)} style={{cursor:'pointer',fontSize:20,fontWeight:700,color:T.green}}>+</div></div>
         </div>
-        <button onClick={handleAdd} style={{width:'100%',height:54,borderRadius:16,border:'none',background:added?T.greenLight:T.terra,color:T.white,fontSize:16,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8,transition:'background .3s'}}>
-          {added?<><IC.Check c={T.white} s={18}/> Ajouté !</>:<>Ajouter · €{(product.price*qty).toFixed(2)}</>}
-        </button>
+        <button onClick={handleAdd} style={{width:'100%',height:54,borderRadius:16,border:'none',background:added?T.greenLight:T.terra,color:T.white,fontSize:16,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8,transition:'background .3s'}}>{added?<><IC.Check c={T.white} s={18}/> Ajouté !</>:<>Ajouter · €{(product.price*qty).toFixed(2)}</>}</button>
       </div>
     </div>
   );
@@ -284,22 +268,33 @@ function ProductScreen({product,onBack,onAddToCart,cartItems,userPos}){
 function CartScreen({cartItems,onRemove,onChangeQty,onCheckout,onBack,userPos}){
   const total=cartItems.reduce((s,i)=>s+i.price*i.qty,0);
   const dFree=total>=30,delivery=dFree?0:3.90;
-  const todaySlots=getSlots().filter(s=>s.day==='today');
   const maxDm=cartItems.reduce((mx,item)=>{const f=FARMS.find(x=>x.id===item.farm);if(!f||!userPos)return mx;return Math.max(mx,delivMin(haversine(userPos.lat,userPos.lng,f.lat,f.lng)));},0);
+  const arrival=maxDm>0?arrivalTime(maxDm):null;
+  const open=isServiceOpen();
   return(
     <div style={{height:'100%',display:'flex',flexDirection:'column',background:T.cream}}>
       <div style={{padding:'60px 20px 16px',background:T.white,borderBottom:`1px solid ${T.border}`,flexShrink:0}}><div style={{display:'flex',alignItems:'center',gap:12}}><div onClick={onBack} style={{cursor:'pointer'}}><IC.Back/></div><div style={{fontSize:20,fontWeight:800,color:T.text}}>Mon Panier</div><div style={{fontSize:13,color:T.muted,marginLeft:'auto'}}>{cartItems.length} article{cartItems.length!==1?'s':''}</div></div></div>
       <div style={{flex:1,overflowY:'auto'}}>
         {cartItems.length===0?(<div style={{textAlign:'center',marginTop:100,padding:'0 40px'}}><div style={{width:80,height:80,borderRadius:'50%',background:T.tag,margin:'0 auto 16px',display:'flex',alignItems:'center',justifyContent:'center'}}><IC.Cart c={T.muted} s={36}/></div><div style={{fontSize:17,fontWeight:700,color:T.text,marginBottom:6}}>Votre panier est vide</div><div style={{fontSize:13,color:T.muted}}>Ajoutez des produits frais pour commencer</div></div>):(
           <div style={{padding:'12px 16px'}}>
-            {maxDm>0&&(<div style={{background:maxDm<=30?'#eef6ea':'#fff3cd',borderRadius:14,padding:'12px 14px',marginBottom:12,display:'flex',alignItems:'center',gap:10,border:`1.5px solid ${maxDm<=30?'#c8e0c0':'#fde68a'}`}}><IC.Truck c={maxDm<=30?T.green:T.amber} s={18}/><div><div style={{fontSize:13,fontWeight:700,color:maxDm<=30?T.green:T.amber}}>Livraison estimée : {maxDm} min {maxDm<=30?'✓':''}</div><div style={{fontSize:11,color:T.muted}}>{maxDm<=30?'Toutes les fermes sont dans votre rayon':'Basé sur la ferme la plus éloignée'}</div></div></div>)}
-            {todaySlots.length>0&&(<div style={{background:todaySlots[0].urgency==='last'?'#fff0ec':T.tag,borderRadius:14,padding:'11px 14px',marginBottom:12,display:'flex',alignItems:'center',gap:8,border:`1.5px solid ${todaySlots[0].urgency==='last'?'#f5c0a8':'#c8e0c0'}`}}><IC.Lightning c={todaySlots[0].urgency==='last'?T.express:T.green} s={16}/><div style={{flex:1}}><div style={{fontSize:12,fontWeight:700,color:todaySlots[0].urgency==='last'?T.express:T.green}}>{todaySlots[0].urgency==='last'?"Dernière chance express aujourd'hui !":'Express disponible !'}</div><div style={{fontSize:11,color:T.muted}}>{todaySlots[0].label}</div></div></div>)}
+            {/* Heure d'arrivée estimée — la pièce centrale */}
+            {maxDm>0&&open&&(<div style={{background:'linear-gradient(135deg,#3d5c35,#5a7a4e)',borderRadius:16,padding:'16px',marginBottom:14,animation:'slide-up .3s ease'}}>
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+                <div style={{width:8,height:8,borderRadius:'50%',background:'#a8f08a',animation:'pulse-dot 1.2s ease-in-out infinite',flexShrink:0}}/>
+                <span style={{fontSize:10,fontWeight:800,color:'rgba(255,255,255,.75)',letterSpacing:1.1,textTransform:'uppercase'}}>Livraison immédiate</span>
+              </div>
+              <div style={{display:'flex',alignItems:'flex-end',justifyContent:'space-between'}}>
+                <div>
+                  <div style={{fontSize:13,color:'rgba(255,255,255,.7)',marginBottom:4}}>Vous commandez maintenant à <strong style={{color:T.white}}>{getBxlNow().label}</strong></div>
+                  <div style={{fontSize:22,fontWeight:900,color:T.white}}>Livré avant <span style={{color:'#a8f08a'}}>{arrival}</span></div>
+                  <div style={{fontSize:12,color:'rgba(255,255,255,.6)',marginTop:4}}>({maxDm} min · un coursier part immédiatement)</div>
+                </div>
+                <IC.Bike c="rgba(255,255,255,.7)" s={36}/>
+              </div>
+            </div>)}
+            {maxDm>0&&!open&&(<div style={{background:'#f5f5f0',borderRadius:14,padding:'12px 14px',marginBottom:12,display:'flex',alignItems:'center',gap:8,border:`1px solid ${T.border}`}}><IC.Clock c={T.muted} s={16}/><div style={{fontSize:12,color:T.muted}}>Service disponible de <strong>7h à 21h</strong>. Votre panier sera prêt dès l'ouverture.</div></div>)}
             {!dFree?(<div style={{background:T.white,borderRadius:14,padding:'12px 14px',marginBottom:12}}><div style={{display:'flex',alignItems:'center',gap:6,marginBottom:8}}><IC.Truck c={T.terra} s={16}/><span style={{fontSize:12,color:T.terra,fontWeight:600}}>Plus que €{(30-total).toFixed(2)} pour la livraison gratuite</span></div><div style={{height:4,borderRadius:2,background:T.tag}}><div style={{height:'100%',borderRadius:2,background:T.terra,width:`${Math.min(100,(total/30)*100)}%`,transition:'width .3s'}}/></div></div>):(<div style={{background:'#eef6ea',borderRadius:14,padding:'10px 14px',marginBottom:12,display:'flex',alignItems:'center',gap:8}}><IC.Check c={T.green} s={16}/><span style={{fontSize:12,color:T.green,fontWeight:700}}>Livraison gratuite débloquée !</span></div>)}
-            {cartItems.map(item=>{const f=FARMS.find(x=>x.id===item.farm);const d=userPos&&f?haversine(userPos.lat,userPos.lng,f.lat,f.lng):null;const dm2=d!==null?delivMin(d):null;return(<div key={item.id} style={{background:T.white,borderRadius:16,padding:'12px',marginBottom:10,display:'flex',gap:12,alignItems:'center'}}>
-              <div style={{width:60,height:60,borderRadius:12,overflow:'hidden',flexShrink:0}}><Img src={item.img} style={{width:'100%',height:'100%'}}/></div>
-              <div style={{flex:1}}><div style={{fontSize:13,fontWeight:700,color:T.text,marginBottom:2}}>{item.name}</div><div style={{fontSize:11,color:T.muted,marginBottom:4}}>{f?.name}{dm2!==null&&<span style={{color:dm2<=30?T.green:T.amber,fontWeight:700}}> · {dm2} min</span>}</div><div style={{display:'flex',alignItems:'center',gap:10}}><div style={{display:'flex',alignItems:'center',gap:10,background:T.tag,borderRadius:10,padding:'5px 10px'}}><div onClick={()=>onChangeQty(item.id,item.qty-1)} style={{cursor:'pointer',fontSize:16,fontWeight:700,color:T.green}}>−</div><span style={{fontSize:13,fontWeight:700,color:T.text,minWidth:14,textAlign:'center'}}>{item.qty}</span><div onClick={()=>onChangeQty(item.id,item.qty+1)} style={{cursor:'pointer',fontSize:16,fontWeight:700,color:T.green}}>+</div></div><span style={{fontSize:14,fontWeight:800,color:T.green}}>€{(item.price*item.qty).toFixed(2)}</span></div></div>
-              <div onClick={()=>onRemove(item.id)} style={{cursor:'pointer',padding:6}}><IC.Trash/></div>
-            </div>);})}
+            {cartItems.map(item=>{const f=FARMS.find(x=>x.id===item.farm);const d=userPos&&f?haversine(userPos.lat,userPos.lng,f.lat,f.lng):null;const dm2=d!==null?delivMin(d):null;return(<div key={item.id} style={{background:T.white,borderRadius:16,padding:'12px',marginBottom:10,display:'flex',gap:12,alignItems:'center'}}><div style={{width:60,height:60,borderRadius:12,overflow:'hidden',flexShrink:0}}><Img src={item.img} style={{width:'100%',height:'100%'}}/></div><div style={{flex:1}}><div style={{fontSize:13,fontWeight:700,color:T.text,marginBottom:2}}>{item.name}</div><div style={{fontSize:11,color:T.muted,marginBottom:4}}>{f?.name}{dm2!==null&&<span style={{color:dm2<=30?T.green:T.amber,fontWeight:700}}> · {dm2} min</span>}</div><div style={{display:'flex',alignItems:'center',gap:10}}><div style={{display:'flex',alignItems:'center',gap:10,background:T.tag,borderRadius:10,padding:'5px 10px'}}><div onClick={()=>onChangeQty(item.id,item.qty-1)} style={{cursor:'pointer',fontSize:16,fontWeight:700,color:T.green}}>−</div><span style={{fontSize:13,fontWeight:700,color:T.text,minWidth:14,textAlign:'center'}}>{item.qty}</span><div onClick={()=>onChangeQty(item.id,item.qty+1)} style={{cursor:'pointer',fontSize:16,fontWeight:700,color:T.green}}>+</div></div><span style={{fontSize:14,fontWeight:800,color:T.green}}>€{(item.price*item.qty).toFixed(2)}</span></div></div><div onClick={()=>onRemove(item.id)} style={{cursor:'pointer',padding:6}}><IC.Trash/></div></div>);})}
           </div>
         )}
       </div>
@@ -309,34 +304,106 @@ function CartScreen({cartItems,onRemove,onChangeQty,onCheckout,onBack,userPos}){
 }
 
 // ─── CHECKOUT ─────────────────────────────────────────────────
+// Plus de créneau — juste adresse + paiement + confirmation avec notif coursier
 function CheckoutScreen({cartItems,onConfirm,onBack,userPos}){
-  const[step,setStep]=useState(0);
+  const[step,setStep]=useState(0); // 0=adresse 1=paiement 2=notif coursier 3=confirmé
   const[rue,setRue]=useState('');
   const[payMethod,setPayMethod]=useState(0);
+  const[notifStep,setNotifStep]=useState(0); // animation notif coursier
   const total=cartItems.reduce((s,i)=>s+i.price*i.qty,0);
   const delivery=total>=30?0:3.90;
-  const slots=getSlots();
-  const[selSlot,setSelSlot]=useState(slots.length>0?0:null);
   const pays=[{label:'Carte bancaire',sub:'Visa / Mastercard',Icon:IC.Card},{label:'Bancontact',sub:'Paiement local belge',Icon:IC.Card},{label:'PayPal',sub:'',Icon:IC.Card}];
   const maxDm=cartItems.reduce((mx,item)=>{const f=FARMS.find(x=>x.id===item.farm);if(!f||!userPos)return mx;return Math.max(mx,delivMin(haversine(userPos.lat,userPos.lng,f.lat,f.lng)));},0);
+  const arrival=arrivalTime(maxDm>0?maxDm:25);
+  const orderTime=getBxlNow().label;
   const loc=userPos?.communeName||'Votre position';
 
-  if(step===2){const cs=slots[selSlot]||slots[0];return(<div style={{height:'100%',background:T.green,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:32,position:'relative',overflow:'hidden',animation:'fade-in .4s ease'}}><div style={{position:'absolute',top:-80,right:-80,width:280,height:280,borderRadius:'50%',background:'rgba(255,255,255,.05)'}}/><div style={{position:'absolute',bottom:-60,left:-60,width:240,height:240,borderRadius:'50%',background:'rgba(255,255,255,.04)'}}/><div style={{width:80,height:80,borderRadius:'50%',background:'rgba(255,255,255,.18)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:24}}><IC.Check c={T.white} s={38}/></div><div style={{fontSize:26,fontWeight:800,color:T.white,textAlign:'center',marginBottom:8}}>Commande confirmée !</div><div style={{fontSize:14,color:'rgba(255,255,255,.7)',textAlign:'center',marginBottom:10}}>{loc}{rue?` · ${rue}`:''}</div><div style={{background:'rgba(255,255,255,.12)',borderRadius:16,padding:'14px 20px',textAlign:'center',marginBottom:6}}>{maxDm>0&&<div style={{fontSize:32,fontWeight:900,color:T.white,marginBottom:4}}>{maxDm} min</div>}<div style={{fontSize:13,color:'rgba(255,255,255,.8)'}}>Livraison estimée</div>{cs&&<div style={{fontSize:12,color:'rgba(255,255,255,.6)',marginTop:4}}>Créneau : {cs.label}</div>}</div><div style={{fontSize:30,fontWeight:800,color:T.white,marginTop:12}}>€{(total+delivery).toFixed(2)}</div><button onClick={onConfirm} style={{marginTop:36,width:'100%',height:54,borderRadius:16,border:'none',background:T.terra,color:T.white,fontSize:16,fontWeight:700,cursor:'pointer'}}>Retour à l'accueil</button></div>);}
+  // Étape 2 : animation "notification coursier reçue"
+  useEffect(()=>{
+    if(step!==2)return;
+    const t1=setTimeout(()=>setNotifStep(1),600);   // notif apparaît
+    const t2=setTimeout(()=>setNotifStep(2),2200);  // coursier accepte
+    const t3=setTimeout(()=>setNotifStep(3),3800);  // confirmation
+    const t4=setTimeout(()=>setStep(3),4600);       // écran final
+    return()=>{clearTimeout(t1);clearTimeout(t2);clearTimeout(t3);clearTimeout(t4);};
+  },[step]);
 
+  // ── Étape 2 : Simulation notification coursier ──
+  if(step===2){return(
+    <div style={{height:'100%',background:'#0f1a0c',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:32,position:'relative',overflow:'hidden'}}>
+      <div style={{position:'absolute',inset:0,background:'radial-gradient(ellipse at center,rgba(61,92,53,.35) 0%,transparent 70%)'}}/>
+      {/* Icône coursier pulsante */}
+      <div style={{position:'relative',marginBottom:32,zIndex:2}}>
+        <div style={{width:90,height:90,borderRadius:'50%',background:'rgba(61,92,53,.4)',border:`2px solid ${T.green}`,display:'flex',alignItems:'center',justifyContent:'center',animation:notifStep>=1?'blink-ring 1.2s ease-in-out 2':'none'}}>
+          <IC.Bike c={T.white} s={40}/>
+        </div>
+        {notifStep>=2&&<div style={{position:'absolute',top:-4,right:-4,width:26,height:26,borderRadius:'50%',background:'#22c55e',display:'flex',alignItems:'center',justifyContent:'center',animation:'pop-in .35s ease'}}><IC.Check c={T.white} s={12}/></div>}
+      </div>
+      {/* Notification push simulée */}
+      {notifStep>=1&&(
+        <div style={{width:'100%',background:'rgba(255,255,255,.07)',backdropFilter:'blur(12px)',borderRadius:18,padding:'14px 16px',marginBottom:20,border:'1px solid rgba(255,255,255,.1)',animation:'notif-slide .4s ease',zIndex:2}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+            <div style={{width:34,height:34,borderRadius:10,background:T.green,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><IC.Phone c={T.white} s={16}/></div>
+            <div><div style={{fontSize:12,fontWeight:700,color:'rgba(255,255,255,.9)'}}>FarmNow · Coursier</div><div style={{fontSize:10,color:'rgba(255,255,255,.4)'}}>maintenant</div></div>
+          </div>
+          <div style={{fontSize:13,color:'rgba(255,255,255,.8)',lineHeight:1.5}}>
+            {notifStep===1&&"🔔 Nouvelle commande reçue — préparation en cours…"}
+            {notifStep>=2&&"✅ Commande acceptée ! Votre coursier prépare la livraison."}
+          </div>
+          {notifStep>=2&&(<div style={{marginTop:10,height:3,borderRadius:2,background:'rgba(255,255,255,.15)',overflow:'hidden'}}><div style={{height:'100%',background:'#22c55e',borderRadius:2,animation:'progress 1.6s ease forwards'}}/></div>)}
+        </div>
+      )}
+      <div style={{textAlign:'center',zIndex:2}}>
+        <div style={{fontSize:14,color:'rgba(255,255,255,.45)',marginBottom:6}}>{notifStep===0&&'Envoi de la commande…'}{notifStep===1&&'Recherche d\'un coursier…'}{notifStep===2&&'Coursier assigné !'}{notifStep>=3&&'C\'est parti ! 🚀'}</div>
+        <div style={{fontSize:20,fontWeight:800,color:T.white}}>{notifStep>=2?`Livraison avant ${arrival}`:'Traitement en cours…'}</div>
+      </div>
+    </div>
+  );}
+
+  // ── Étape 3 : Écran de confirmation finale ──
+  if(step===3){return(
+    <div style={{height:'100%',background:T.green,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:32,position:'relative',overflow:'hidden',animation:'fade-in .5s ease'}}>
+      <div style={{position:'absolute',top:-80,right:-80,width:280,height:280,borderRadius:'50%',background:'rgba(255,255,255,.05)'}}/>
+      <div style={{position:'absolute',bottom:-60,left:-60,width:240,height:240,borderRadius:'50%',background:'rgba(255,255,255,.04)'}}/>
+      <div style={{width:80,height:80,borderRadius:'50%',background:'rgba(255,255,255,.18)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:20,animation:'pop-in .5s ease'}}><IC.Check c={T.white} s={38}/></div>
+      <div style={{fontSize:26,fontWeight:800,color:T.white,textAlign:'center',marginBottom:6,letterSpacing:-.3}}>Commande confirmée !</div>
+      <div style={{fontSize:13,color:'rgba(255,255,255,.65)',textAlign:'center',marginBottom:20}}>{loc}{rue?` · ${rue}`:''}</div>
+      {/* Bloc temps réel */}
+      <div style={{width:'100%',background:'rgba(255,255,255,.1)',borderRadius:20,padding:'20px',marginBottom:20,textAlign:'center'}}>
+        <div style={{fontSize:12,fontWeight:700,color:'rgba(255,255,255,.6)',letterSpacing:1,textTransform:'uppercase',marginBottom:6}}>Vous avez commandé à</div>
+        <div style={{fontSize:22,fontWeight:900,color:T.white,marginBottom:12}}>{orderTime}</div>
+        <div style={{width:'100%',height:1,background:'rgba(255,255,255,.15)',marginBottom:12}}/>
+        <div style={{fontSize:12,fontWeight:700,color:'rgba(255,255,255,.6)',letterSpacing:1,textTransform:'uppercase',marginBottom:6}}>Livraison estimée avant</div>
+        <div style={{fontSize:36,fontWeight:900,color:'#a8f08a',letterSpacing:-.5}}>{arrival}</div>
+        <div style={{fontSize:12,color:'rgba(255,255,255,.5)',marginTop:6}}>dans environ {maxDm} min · coursier en route</div>
+      </div>
+      <div style={{fontSize:32,fontWeight:800,color:T.white,marginBottom:24}}>€{(total+delivery).toFixed(2)}</div>
+      <button onClick={onConfirm} style={{width:'100%',height:54,borderRadius:16,border:'none',background:T.terra,color:T.white,fontSize:16,fontWeight:700,cursor:'pointer'}}>Retour à l'accueil</button>
+    </div>
+  );}
+
+  // ── Étapes 0 et 1 : adresse + paiement ──
   return(
     <div style={{height:'100%',display:'flex',flexDirection:'column',background:T.cream}}>
       <div style={{padding:'60px 20px 16px',background:T.white,borderBottom:`1px solid ${T.border}`,flexShrink:0}}>
-        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16}}><div onClick={onBack} style={{cursor:'pointer'}}><IC.Back/></div><div style={{fontSize:20,fontWeight:800,color:T.text}}>Livraison Express</div></div>
-        <div style={{display:'flex',alignItems:'center',gap:6}}>{['Adresse & créneau','Paiement'].map((s,i)=>(<React.Fragment key={i}>{i>0&&<div style={{flex:1,height:2,background:step>0?T.green:T.border,borderRadius:1,transition:'background .3s'}}/>}<div style={{display:'flex',alignItems:'center',gap:5}}><div style={{width:22,height:22,borderRadius:'50%',fontSize:11,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',background:step>=i?T.green:T.tag,color:step>=i?T.white:T.muted}}>{step>i?<IC.Check c={T.white} s={12}/>:i+1}</div><span style={{fontSize:12,fontWeight:600,color:step>=i?T.green:T.muted}}>{s}</span></div></React.Fragment>))}</div>
+        <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16}}><div onClick={onBack} style={{cursor:'pointer'}}><IC.Back/></div><div style={{fontSize:20,fontWeight:800,color:T.text}}>Livraison immédiate</div></div>
+        <div style={{display:'flex',alignItems:'center',gap:6}}>{['Adresse','Paiement'].map((s,i)=>(<React.Fragment key={i}>{i>0&&<div style={{flex:1,height:2,background:step>0?T.green:T.border,borderRadius:1,transition:'background .3s'}}/>}<div style={{display:'flex',alignItems:'center',gap:5}}><div style={{width:22,height:22,borderRadius:'50%',fontSize:11,fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',background:step>=i?T.green:T.tag,color:step>=i?T.white:T.muted}}>{step>i?<IC.Check c={T.white} s={12}/>:i+1}</div><span style={{fontSize:12,fontWeight:600,color:step>=i?T.green:T.muted}}>{s}</span></div></React.Fragment>))}</div>
       </div>
       <div style={{flex:1,overflowY:'auto',padding:'16px'}}>
         {step===0&&(<div>
+          {/* Heure d'arrivée prévue bien visible */}
+          {maxDm>0&&isServiceOpen()&&(<div style={{background:'linear-gradient(135deg,#3d5c35,#5a7a4e)',borderRadius:16,padding:'14px 16px',marginBottom:16,display:'flex',alignItems:'center',gap:12}}>
+            <IC.Bike c="rgba(255,255,255,.7)" s={28}/>
+            <div><div style={{fontSize:12,color:'rgba(255,255,255,.7)',marginBottom:2}}>Vous commandez à {getBxlNow().label}</div><div style={{fontSize:18,fontWeight:900,color:T.white}}>Livré avant <span style={{color:'#a8f08a'}}>{arrival}</span></div><div style={{fontSize:11,color:'rgba(255,255,255,.55)',marginTop:2}}>{maxDm} min · coursier assigné dès confirmation</div></div>
+          </div>)}
           <div style={{fontSize:14,fontWeight:700,color:T.text,marginBottom:10,display:'flex',alignItems:'center',gap:6}}><IC.Pin c={T.green} s={14}/> Adresse de livraison</div>
           <div style={{background:T.white,borderRadius:14,padding:'12px 14px',marginBottom:10,display:'flex',alignItems:'center',gap:10,border:`1.5px solid ${T.border}`}}><IC.GPS c={T.green} s={16}/><div><div style={{fontSize:13,fontWeight:700,color:T.text}}>{loc}</div><div style={{fontSize:11,color:T.muted}}>{userPos?.source==='gps'?'Position GPS détectée':'Commune sélectionnée'}</div></div></div>
-          <input placeholder="Rue et numéro" value={rue} onChange={e=>setRue(e.target.value)} style={{width:'100%',height:46,borderRadius:14,border:`1.5px solid ${T.border}`,padding:'0 14px',fontSize:14,color:T.text,background:T.white,outline:'none',fontFamily:'inherit',marginBottom:16}}/>
-          {maxDm>0&&(<div style={{background:maxDm<=30?'#eef6ea':'#fff3cd',borderRadius:12,padding:'10px 14px',marginBottom:16,display:'flex',alignItems:'center',gap:8,border:`1px solid ${maxDm<=30?'#c8e0c0':'#fde68a'}`}}><IC.Clock c={maxDm<=30?T.green:T.amber} s={14}/><span style={{fontSize:12,fontWeight:700,color:maxDm<=30?T.green:T.amber}}>Livraison estimée : {maxDm} min depuis la ferme</span></div>)}
-          <div style={{fontSize:14,fontWeight:700,color:T.text,marginBottom:10,display:'flex',alignItems:'center',gap:6}}><IC.Clock c={T.green} s={14}/> Créneau de livraison</div>
-          {slots.length===0?(<div style={{background:'#fff0ec',borderRadius:14,padding:'14px 16px',border:`1px solid #f5c0a8`}}><div style={{fontSize:13,fontWeight:700,color:T.express,marginBottom:4}}>Plus de livraison express ce soir</div><div style={{fontSize:12,color:T.muted}}>Des créneaux seront disponibles demain dès 8h.</div></div>):slots.map((s,i)=>(<div key={i} onClick={()=>setSelSlot(i)} style={{background:T.white,borderRadius:14,padding:'13px 16px',marginBottom:10,display:'flex',alignItems:'center',justifyContent:'space-between',border:`1.5px solid ${selSlot===i?T.green:T.border}`,cursor:'pointer',transition:'border .2s'}}><div style={{flex:1}}><div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3}}><span style={{fontSize:14,color:T.text,fontWeight:selSlot===i?700:400}}>{s.label}</span>{s.urgency==='last'&&(<div style={{background:'#fff0ec',borderRadius:6,padding:'1px 6px',display:'flex',alignItems:'center',gap:3}}><IC.Lightning c={T.express} s={9}/><span style={{fontSize:9,fontWeight:800,color:T.express}}>Dernière chance</span></div>)}{s.urgency==='soon'&&(<div style={{background:T.tag,borderRadius:6,padding:'1px 6px'}}><span style={{fontSize:9,fontWeight:700,color:T.green}}>Bientôt fermé</span></div>)}</div>{s.day==='today'&&<div style={{fontSize:11,color:T.muted}}>Commandez avant {s.cH}h</div>}</div><div style={{width:20,height:20,borderRadius:'50%',border:`2px solid ${selSlot===i?T.green:T.border}`,background:selSlot===i?T.green:'transparent',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>{selSlot===i&&<IC.Check c={T.white} s={10}/>}</div></div>))}
+          <input placeholder="Rue et numéro (ex: Rue de la Loi 16)" value={rue} onChange={e=>setRue(e.target.value)} style={{width:'100%',height:46,borderRadius:14,border:`1.5px solid ${T.border}`,padding:'0 14px',fontSize:14,color:T.text,background:T.white,outline:'none',fontFamily:'inherit',marginBottom:16}}/>
+          {/* Récap articles */}
+          <div style={{background:T.white,borderRadius:14,padding:'12px 14px'}}>
+            <div style={{fontSize:13,fontWeight:700,color:T.text,marginBottom:10}}>Votre commande</div>
+            {cartItems.map(i=>{const f=FARMS.find(x=>x.id===i.farm);const d=userPos&&f?haversine(userPos.lat,userPos.lng,f.lat,f.lng):null;const dm2=d!==null?delivMin(d):null;return(<div key={i.id} style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}><div style={{width:36,height:36,borderRadius:9,overflow:'hidden',flexShrink:0}}><Img src={i.img} style={{width:'100%',height:'100%'}}/></div><div style={{flex:1}}><div style={{fontSize:12,fontWeight:600,color:T.text}}>{i.name} ×{i.qty}</div><div style={{fontSize:11,color:T.muted}}>{f?.name}{dm2!==null&&<span style={{color:dm2<=30?T.green:T.amber,fontWeight:700}}> · {dm2} min</span>}</div></div><span style={{fontSize:13,fontWeight:700,color:T.green}}>€{(i.price*i.qty).toFixed(2)}</span></div>);})}
+          </div>
         </div>)}
         {step===1&&(<div>
           <div style={{fontSize:14,fontWeight:700,color:T.text,marginBottom:12,display:'flex',alignItems:'center',gap:6}}><IC.Card c={T.green} s={16}/> Moyen de paiement</div>
@@ -344,15 +411,15 @@ function CheckoutScreen({cartItems,onConfirm,onBack,userPos}){
           <div style={{background:T.white,borderRadius:14,padding:'14px 16px',marginTop:8}}>
             <div style={{fontSize:14,fontWeight:700,color:T.text,marginBottom:10}}>Récapitulatif</div>
             <div style={{fontSize:12,color:T.muted,marginBottom:4,display:'flex',alignItems:'center',gap:4}}><IC.GPS c={T.muted} s={10}/>{loc}{rue?` · ${rue}`:''}</div>
-            {slots[selSlot]&&<div style={{fontSize:12,color:T.muted,marginBottom:8,display:'flex',alignItems:'center',gap:4}}><IC.Clock c={T.muted} s={10}/>{slots[selSlot].label}{maxDm>0&&<span style={{color:maxDm<=30?T.green:T.amber,fontWeight:700}}> · {maxDm} min</span>}</div>}
+            <div style={{fontSize:12,color:T.muted,marginBottom:8,display:'flex',alignItems:'center',gap:4}}><IC.Clock c={T.muted} s={10}/>Livraison immédiate · avant <strong style={{color:T.green}}>{arrival}</strong></div>
             {cartItems.map(i=>(<div key={i.id} style={{display:'flex',justifyContent:'space-between',marginBottom:7,alignItems:'center',gap:8}}><div style={{width:32,height:32,borderRadius:8,overflow:'hidden',flexShrink:0}}><Img src={i.img} style={{width:'100%',height:'100%'}}/></div><span style={{fontSize:12,color:T.muted,flex:1}}>{i.name} ×{i.qty}</span><span style={{fontSize:13,fontWeight:600}}>€{(i.price*i.qty).toFixed(2)}</span></div>))}
             <div style={{borderTop:`1px solid ${T.border}`,paddingTop:10,marginTop:6,display:'flex',justifyContent:'space-between'}}><span style={{fontSize:15,fontWeight:800}}>Total</span><span style={{fontSize:15,fontWeight:800,color:T.green}}>€{(total+delivery).toFixed(2)}</span></div>
           </div>
         </div>)}
       </div>
       <div style={{padding:'14px 16px 20px',background:T.white,borderTop:`1px solid ${T.border}`,flexShrink:0}}>
-        <button onClick={()=>step<1?setStep(1):setStep(2)} disabled={step===0&&(slots.length===0||selSlot===null)} style={{width:'100%',height:54,borderRadius:16,border:'none',background:(step===0&&(slots.length===0||selSlot===null))?'#ccc':T.terra,color:T.white,fontSize:16,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
-          {step===0?'Continuer →':'Confirmer la commande'}
+        <button onClick={()=>step<1?setStep(1):setStep(2)} style={{width:'100%',height:54,borderRadius:16,border:'none',background:T.terra,color:T.white,fontSize:16,fontWeight:700,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:8}}>
+          {step===0?'Continuer →':<><IC.Bike c={T.white} s={18}/> Confirmer & notifier le coursier</>}
         </button>
       </div>
     </div>
@@ -361,8 +428,8 @@ function CheckoutScreen({cartItems,onConfirm,onBack,userPos}){
 
 // ─── PROFILE ──────────────────────────────────────────────────
 function ProfileScreen({onNav,userPos}){
-  const orders=[{id:'#FN-2841',date:'18 Avr 2026',items:'Tomates cerises, Fraises',total:'€8.00',status:'Livré',min:22},{id:'#FN-2798',date:'12 Avr 2026',items:'Poulet fermier, Œufs bio',total:'€19.30',status:'Livré',min:28}];
-  const settings=[{Icon:IC.GPS,label:'Ma position',sub:userPos?.communeName||'Modifier la zone de livraison'},{Icon:IC.Card,label:'Paiement',sub:'Modes de paiement'},{Icon:IC.Bell,label:'Notifications',sub:'Alertes créneaux & promos'},{Icon:IC.Heart,label:'Fermes favorites',sub:'Fermes sauvegardées'}];
+  const orders=[{id:'#FN-2841',date:'18 Avr 2026',items:'Tomates cerises, Fraises',total:'€8.00',status:'Livré',orderAt:'12h21',delivAt:'12h47'},{id:'#FN-2798',date:'12 Avr 2026',items:'Poulet fermier, Œufs bio',total:'€19.30',status:'Livré',orderAt:'17h05',delivAt:'17h33'}];
+  const settings=[{Icon:IC.GPS,label:'Ma position',sub:userPos?.communeName||'Modifier la zone de livraison'},{Icon:IC.Card,label:'Paiement',sub:'Modes de paiement'},{Icon:IC.Bell,label:'Notifications',sub:'Alertes & suivis de livraison'},{Icon:IC.Heart,label:'Fermes favorites',sub:'Fermes sauvegardées'}];
   return(
     <div style={{height:'100%',display:'flex',flexDirection:'column',background:T.cream}}>
       <div style={{flex:1,overflowY:'auto'}}>
@@ -372,7 +439,18 @@ function ProfileScreen({onNav,userPos}){
         </div>
         <div style={{padding:'16px'}}>
           <div style={{fontSize:15,fontWeight:700,color:T.text,marginBottom:12}}>Commandes récentes</div>
-          {orders.map(o=>(<div key={o.id} style={{background:T.white,borderRadius:14,padding:'14px',marginBottom:10}}><div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}><span style={{fontSize:13,fontWeight:700,color:T.text}}>{o.id}</span><span style={{fontSize:12,fontWeight:700,color:T.green,background:T.tag,padding:'2px 8px',borderRadius:8}}>{o.status}</span></div><div style={{fontSize:12,color:T.muted,marginBottom:2}}>{o.date} · <span style={{color:T.green,fontWeight:600}}>livré en {o.min} min</span></div><div style={{fontSize:12,color:T.muted}}>{o.items}</div><div style={{fontSize:14,fontWeight:700,color:T.green,marginTop:4}}>{o.total}</div></div>))}
+          {orders.map(o=>(<div key={o.id} style={{background:T.white,borderRadius:14,padding:'14px',marginBottom:10}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}><span style={{fontSize:13,fontWeight:700,color:T.text}}>{o.id}</span><span style={{fontSize:12,fontWeight:700,color:T.green,background:T.tag,padding:'2px 8px',borderRadius:8}}>{o.status}</span></div>
+            <div style={{fontSize:12,color:T.muted,marginBottom:4}}>{o.date}</div>
+            {/* Nouveau : affichage heure commande → heure livraison */}
+            <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
+              <div style={{fontSize:11,fontWeight:700,color:T.muted,background:T.tag,borderRadius:6,padding:'2px 7px'}}>⏱ {o.orderAt}</div>
+              <div style={{flex:1,height:1.5,background:`linear-gradient(to right,${T.green},${T.greenLight})`}}/>
+              <div style={{fontSize:11,fontWeight:700,color:T.white,background:T.green,borderRadius:6,padding:'2px 7px'}}>🏁 {o.delivAt}</div>
+            </div>
+            <div style={{fontSize:12,color:T.muted}}>{o.items}</div>
+            <div style={{fontSize:14,fontWeight:700,color:T.green,marginTop:4}}>{o.total}</div>
+          </div>))}
           <div style={{fontSize:15,fontWeight:700,color:T.text,margin:'18px 0 12px'}}>Paramètres</div>
           {settings.map(s=>(<div key={s.label} style={{background:T.white,borderRadius:14,padding:'14px 16px',marginBottom:8,display:'flex',alignItems:'center',gap:12,cursor:'pointer'}}><div style={{width:38,height:38,borderRadius:11,background:T.tag,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><s.Icon c={T.green} s={18}/></div><div style={{flex:1}}><div style={{fontSize:14,fontWeight:600,color:T.text}}>{s.label}</div><div style={{fontSize:11,color:T.muted}}>{s.sub}</div></div><IC.ChevronR c={T.muted} s={14}/></div>))}
         </div>
